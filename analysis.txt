@@ -1,3 +1,0 @@
-#When using logistic regression:
-
-“Our first model can distinguish likely acceptances from likely declines with moderate reliability. It is good enough for a prototype and dashboard, but not yet enough to automatically decide CTC offers.”

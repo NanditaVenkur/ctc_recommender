@@ -1,0 +1,22 @@
+
+These fields must be there: 
+
+"Offered band","Current CTC","Expected CTC", "Status", "Rex in Yrs"
+
+
+The other csv files must have hte mandatory fields 
+CSV 1
+"Joining Bonus", #field (might have differnt names): "Offered band"
+
+CSV2 
+"Join Bonus", "Previous Company Type",
+
+CSV3 
+
+"Previous Company work type",
+
+
+Additional
+
+
+off_band
