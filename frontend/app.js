@@ -272,11 +272,14 @@ function OfferSimulator({ options }) {
 function ResultPanel({ result }) {
   const p = result.percentile_recommendation;
   const benchmarkRecords = result.accepted_benchmark_records || [];
+  const isOk = result.recommendation_status === "ok";
+  const panelTitle = result.recommendation_status === "review_low_support" ? "Recommendation Review" : isOk ? "Recommendation" : "Escalation Review";
   return h("div", { className: "panel" }, [
     h("div", { className: "panel-title" }, [
-      h("h3", null, "Recommendation"),
+      h("h3", null, panelTitle),
       h("span", null, `${p.specificity} / ${p.confidence} match confidence`),
     ]),
+    h("div", { className: isOk ? "notice good" : "notice warn" }, result.recommendation_message),
     h("div", { className: "result-band" }, [
       h("div", { className: "result-stat" }, [h("span", null, "Suggested CTC"), h("strong", null, fmtLpa(result.suggested_ctc))]),
       h("div", { className: "result-stat" }, [h("span", null, "Current offer probability"), h("strong", null, fmtPct(result.acceptance_probability))]),
@@ -291,6 +294,11 @@ function ResultPanel({ result }) {
       h("div", { className: "result-stat" }, [h("span", null, "Accepted benchmark records"), h("strong", null, p.accepted_similar_records)]),
       h("div", { className: "result-stat" }, [h("span", null, "Skill + LOB records"), h("strong", null, result.profile_match.skill_lob_records)]),
       h("div", { className: "result-stat" }, [h("span", null, "Target 70% offer"), h("strong", null, fmtLpa(result.target_offer_ctc))]),
+    ]),
+    h("div", { className: "result-band" }, [
+      h("div", { className: "result-stat" }, [h("span", null, "Max searched offer"), h("strong", null, fmtLpa(result.curve_max_offer_ctc))]),
+      h("div", { className: "result-stat" }, [h("span", null, "Probability at max"), h("strong", null, fmtPct(result.probability_at_curve_max))]),
+      h("div", { className: "result-stat" }, [h("span", null, "Primary skill support"), h("strong", null, result.category_support?.primary_skill ?? "-")]),
     ]),
     result.warnings.map((warning) => h("div", { className: "warning", key: warning }, warning)),
     h("div", { className: "panel-title", style: { marginTop: 16 } }, [h("h3", null, "Acceptance probability curve"), h("span", null, "Offer CTC vs probability")]),

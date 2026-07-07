@@ -394,6 +394,26 @@ th {
   font-size: 13px;
 }
 
+.notice {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.notice.good {
+  color: #045f45;
+  background: #e9f8f2;
+  border: 1px solid #bce8d8;
+}
+
+.notice.warn {
+  color: #7c4a03;
+  background: #fff8eb;
+  border: 1px solid #f3d19c;
+}
+
 .empty {
   padding: 24px;
   text-align: center;

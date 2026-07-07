@@ -134,9 +134,9 @@ def candidate_to_feature_row(candidate: dict, offer: float) -> pd.DataFrame:
     return pd.DataFrame([row], columns=MODEL_FEATURES)
 
 
-def acceptance_curve(model: TrainedAcceptanceModel, candidate: dict, points: int = 20) -> list[dict]:
-    low = max(float(candidate["current_ctc"]) * 1.05, float(candidate["offered_ctc"]) * 0.8)
-    high = max(float(candidate["expected_ctc"]) * 1.15, float(candidate["offered_ctc"]) * 1.25)
+def acceptance_curve(model: TrainedAcceptanceModel, candidate: dict, points: int = 40) -> list[dict]:
+    low = max(float(candidate["current_ctc"]) * 1.02, float(candidate["offered_ctc"]) * 0.75)
+    high = max(float(candidate["expected_ctc"]) * 1.6, float(candidate["offered_ctc"]) * 2.0)
     offers = np.linspace(low, high, points)
     rows = []
     for offer in offers:
@@ -155,3 +155,10 @@ def predict_acceptance(model: TrainedAcceptanceModel, candidate: dict, offer: fl
     features = candidate_to_feature_row(candidate, offer)
     return float(model.pipeline.predict_proba(features)[0, 1])
 
+
+def category_support(df: pd.DataFrame, candidate: dict, columns: list[str]) -> dict[str, int]:
+    support = {}
+    for column in columns:
+        value = candidate.get(column)
+        support[column] = int((df[column] == value).sum()) if value is not None and column in df.columns else 0
+    return support

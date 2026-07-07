@@ -27,3 +27,5 @@ print(response.json())
 if response.status_code == 200:
     print("\nAssistant:")
     print(response.json()["choices"][0]["message"]["content"])
+
+
