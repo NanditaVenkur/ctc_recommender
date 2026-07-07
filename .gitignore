@@ -1,0 +1,6 @@
+.venv/
+.matplotlib_cache/
+__pycache__/
+*.pyc
+*.log
+ctc_recommender.sqlite3
