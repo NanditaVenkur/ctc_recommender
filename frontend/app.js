@@ -271,26 +271,60 @@ function OfferSimulator({ options }) {
 
 function ResultPanel({ result }) {
   const p = result.percentile_recommendation;
+  const benchmarkRecords = result.accepted_benchmark_records || [];
   return h("div", { className: "panel" }, [
     h("div", { className: "panel-title" }, [
       h("h3", null, "Recommendation"),
-      h("span", null, `${p.specificity} / ${p.confidence} confidence`),
+      h("span", null, `${p.specificity} / ${p.confidence} match confidence`),
     ]),
     h("div", { className: "result-band" }, [
       h("div", { className: "result-stat" }, [h("span", null, "Suggested CTC"), h("strong", null, fmtLpa(result.suggested_ctc))]),
       h("div", { className: "result-stat" }, [h("span", null, "Current offer probability"), h("strong", null, fmtPct(result.acceptance_probability))]),
-      h("div", { className: "result-stat" }, [h("span", null, "Benchmark records"), h("strong", null, p.accepted_similar_records)]),
+      h("div", { className: "result-stat" }, [h("span", null, "Probability at suggested"), h("strong", null, fmtPct(result.probability_at_suggested_ctc))]),
     ]),
     h("div", { className: "result-band" }, [
       h("div", { className: "result-stat" }, [h("span", null, "P20 accepted CTC"), h("strong", null, fmtLpa(p.p20_offered_ctc))]),
       h("div", { className: "result-stat" }, [h("span", null, "P50 accepted CTC"), h("strong", null, fmtLpa(p.p50_offered_ctc))]),
       h("div", { className: "result-stat" }, [h("span", null, "P80 accepted CTC"), h("strong", null, fmtLpa(p.p80_offered_ctc))]),
     ]),
+    h("div", { className: "result-band" }, [
+      h("div", { className: "result-stat" }, [h("span", null, "Accepted benchmark records"), h("strong", null, p.accepted_similar_records)]),
+      h("div", { className: "result-stat" }, [h("span", null, "Skill + LOB records"), h("strong", null, result.profile_match.skill_lob_records)]),
+      h("div", { className: "result-stat" }, [h("span", null, "Target 70% offer"), h("strong", null, fmtLpa(result.target_offer_ctc))]),
+    ]),
     result.warnings.map((warning) => h("div", { className: "warning", key: warning }, warning)),
     h("div", { className: "panel-title", style: { marginTop: 16 } }, [h("h3", null, "Acceptance probability curve"), h("span", null, "Offer CTC vs probability")]),
     h(ProbabilityChart, { data: result.acceptance_curve }),
     h("div", { className: "panel-title", style: { marginTop: 12 } }, [h("h3", null, "Benchmark filters used"), h("span", null, `${p.similar_records} similar offers`) ]),
     h("div", null, Object.entries(p.filters_used).map(([key, value]) => h("span", { className: "tag", style: { marginRight: 6, marginBottom: 6 }, key }, `${key}: ${value}`))),
+    h("div", { className: "panel-title", style: { marginTop: 16 } }, [
+      h("h3", null, "Accepted benchmark records"),
+      h("span", null, `${benchmarkRecords.length} records shown`),
+    ]),
+    benchmarkRecords.length
+      ? h("div", { className: "table-wrap benchmark-table" }, [
+          h("table", null, [
+            h("thead", null, h("tr", null, ["Ref", "Date", "Skill", "LOB", "Location", "Band", "Current", "Expected", "Offered", "Hike", "Gap", "Source", "Status"].map((head) => h("th", { key: head }, head)))),
+            h("tbody", null, benchmarkRecords.map((row) =>
+              h("tr", { key: `${row.candidate_ref}-${row.offer_date}` }, [
+                h("td", null, row.candidate_ref),
+                h("td", null, row.offer_date),
+                h("td", null, row.primary_skill),
+                h("td", null, row.lob),
+                h("td", null, row.location),
+                h("td", null, h("span", { className: "tag" }, row.offered_band)),
+                h("td", null, fmtLpa(row.current_ctc)),
+                h("td", null, fmtLpa(row.expected_ctc)),
+                h("td", null, fmtLpa(row.offered_ctc)),
+                h("td", null, `${Number(row.offered_hike_pct).toFixed(1)}%`),
+                h("td", null, `${Number(row.offer_gap_pct).toFixed(1)}%`),
+                h("td", null, row.candidate_source),
+                h("td", null, h("span", { className: "tag good" }, row.status)),
+              ])
+            )),
+          ]),
+        ])
+      : h("div", { className: "empty" }, "No accepted benchmark records found for the selected filters."),
   ]);
 }
 

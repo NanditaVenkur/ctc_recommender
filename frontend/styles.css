@@ -240,6 +240,17 @@ select {
   overflow-x: auto;
 }
 
+.benchmark-table {
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.benchmark-table table {
+  min-width: 980px;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;

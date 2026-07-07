@@ -196,35 +196,139 @@ def recommend(payload: CandidateRequest) -> dict:
     df = state["df"]
     probability = predict_acceptance(model, candidate, candidate["offered_ctc"])
     curve = acceptance_curve(model, candidate)
-    percentiles = flexible_percentiles(df, candidate, flexibility=payload.flexibility)
+    percentiles = flexible_percentiles(df, candidate, flexibility=payload.flexibility, min_records=8)
 
     target_probability = 0.70
-    suggested = None
+    target_offer_ctc = None
     for point in curve:
         if point["acceptance_probability"] >= target_probability:
-            suggested = point["offered_ctc"]
+            target_offer_ctc = point["offered_ctc"]
             break
-    if suggested is None and percentiles.get("p50_offered_ctc") is not None:
-        suggested = percentiles["p50_offered_ctc"]
+
+    benchmark_p80 = percentiles.get("p80_offered_ctc")
+    benchmark_p50 = percentiles.get("p50_offered_ctc")
+    suggested = _choose_suggested_ctc(
+        offered_ctc=candidate["offered_ctc"],
+        target_offer_ctc=target_offer_ctc,
+        benchmark_p50=benchmark_p50,
+        benchmark_p80=benchmark_p80,
+    )
 
     if suggested is None:
         raise HTTPException(status_code=422, detail="Not enough data to suggest CTC")
+
+    probability_at_suggested = predict_acceptance(model, candidate, suggested)
+    profile_match = _profile_match_counts(df, candidate)
+    benchmark_records = _accepted_benchmark_records(df, percentiles.get("filters_used", {}))
 
     return {
         "candidate": candidate,
         "acceptance_probability": round(probability, 3),
         "suggested_ctc": round(float(suggested), 2),
+        "probability_at_suggested_ctc": round(float(probability_at_suggested), 3),
+        "target_offer_ctc": None if target_offer_ctc is None else round(float(target_offer_ctc), 2),
         "target_probability": target_probability,
+        "profile_match": profile_match,
         "percentile_recommendation": percentiles,
+        "accepted_benchmark_records": benchmark_records,
         "acceptance_curve": curve,
-        "warnings": _recommendation_warnings(percentiles),
+        "warnings": _recommendation_warnings(
+            percentiles,
+            target_offer_ctc,
+            benchmark_p80,
+            profile_match,
+            candidate["offered_ctc"],
+        ),
     }
 
 
-def _recommendation_warnings(percentiles: dict) -> list[str]:
+def _choose_suggested_ctc(
+    offered_ctc: float,
+    target_offer_ctc: float | None,
+    benchmark_p50: float | None,
+    benchmark_p80: float | None,
+) -> float | None:
+    if target_offer_ctc is not None and benchmark_p80 is not None:
+        return max(offered_ctc, min(target_offer_ctc, benchmark_p80))
+    if target_offer_ctc is not None:
+        return max(offered_ctc, target_offer_ctc)
+    if benchmark_p80 is not None and offered_ctc > benchmark_p80:
+        return offered_ctc
+    if benchmark_p50 is not None:
+        return max(offered_ctc, benchmark_p50)
+    return offered_ctc
+
+
+def _profile_match_counts(df: pd.DataFrame, candidate: dict) -> dict:
+    skill_lob = df[
+        (df["primary_skill"] == candidate["primary_skill"])
+        & (df["lob"] == candidate["lob"])
+    ]
+    exact = skill_lob[
+        (skill_lob["location"] == candidate["location"])
+        & (skill_lob["offered_band"] == candidate["offered_band"])
+    ]
+    return {
+        "skill_lob_records": int(len(skill_lob)),
+        "exact_profile_records": int(len(exact)),
+    }
+
+
+def _accepted_benchmark_records(df: pd.DataFrame, filters: dict) -> list[dict]:
+    subset = df[df["accepted"] == 1].copy()
+    for column, value in filters.items():
+        if value is None or column not in subset.columns:
+            continue
+        subset = subset[subset[column] == value]
+
+    columns = [
+        "candidate_ref",
+        "offer_date",
+        "primary_skill",
+        "lob",
+        "location",
+        "city_tier",
+        "offered_band",
+        "current_ctc",
+        "expected_ctc",
+        "offered_ctc",
+        "offered_hike_pct",
+        "offer_gap_pct",
+        "candidate_source",
+        "previous_company_type",
+        "status",
+    ]
+    return (
+        subset[columns]
+        .sort_values("offered_ctc", ascending=False)
+        .round(2)
+        .to_dict(orient="records")
+    )
+
+
+def _recommendation_warnings(
+    percentiles: dict,
+    target_offer_ctc: float | None,
+    benchmark_p80: float | None,
+    profile_match: dict,
+    offered_ctc: float,
+) -> list[str]:
     warnings = []
     if percentiles.get("specificity") == "Broad benchmark":
         warnings.append("The CTC range is based on a broad benchmark, not a close profile match.")
+    if profile_match["skill_lob_records"] == 0:
+        warnings.append("No historical records match this skill and LOB combination. Check whether the selected skill belongs to this business unit.")
+    elif profile_match["exact_profile_records"] == 0:
+        warnings.append("No exact historical records match this skill, LOB, location, and band combination.")
+    if target_offer_ctc is not None and benchmark_p80 is not None and target_offer_ctc > benchmark_p80:
+        warnings.append(
+            f"The model reaches the 70% probability target near {target_offer_ctc:.2f} LPA, "
+            f"which is above the benchmark P80 of {benchmark_p80:.2f} LPA. Treat this as an escalation case, not an automatic offer."
+        )
+    if benchmark_p80 is not None and offered_ctc > benchmark_p80:
+        warnings.append(
+            f"The current offer of {offered_ctc:.2f} LPA is already above the benchmark P80 of {benchmark_p80:.2f} LPA."
+        )
     if percentiles.get("warning"):
         warnings.append(percentiles["warning"])
     return warnings

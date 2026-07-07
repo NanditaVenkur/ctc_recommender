@@ -95,8 +95,9 @@ def flexible_percentiles(data: pd.DataFrame, candidate: dict, flexibility: str =
         if summary["accepted_similar_records"] >= min_records:
             summary = dict(summary)
             summary["fallback_attempts"] = _serializable_attempts(attempts)
-            summary["confidence"] = "High" if summary["accepted_similar_records"] >= min_records * 2 else "Medium"
+            summary["sample_confidence"] = "High" if summary["accepted_similar_records"] >= min_records * 2 else "Medium"
             summary["specificity"] = _specificity_label(summary["filters_used"])
+            summary["confidence"] = _overall_confidence(summary["specificity"], summary["sample_confidence"])
             return summary
 
         if best is None or summary["accepted_similar_records"] > best["accepted_similar_records"]:
@@ -104,8 +105,9 @@ def flexible_percentiles(data: pd.DataFrame, candidate: dict, flexibility: str =
 
     best = dict(best)
     best["fallback_attempts"] = _serializable_attempts(attempts)
-    best["confidence"] = "Low"
+    best["sample_confidence"] = "Low"
     best["specificity"] = _specificity_label(best["filters_used"])
+    best["confidence"] = _overall_confidence(best["specificity"], best["sample_confidence"])
     return best
 
 
@@ -125,3 +127,11 @@ def _specificity_label(filters: dict) -> str:
     if count >= 2:
         return "Related segment"
     return "Broad benchmark"
+
+
+def _overall_confidence(specificity: str, sample_confidence: str) -> str:
+    if specificity == "Exact profile" and sample_confidence in {"High", "Medium"}:
+        return "High"
+    if specificity == "Related segment" and sample_confidence == "High":
+        return "Medium"
+    return "Low"
