@@ -48,7 +48,7 @@ function BarRow({ label, value, max, tone }) {
   ]);
 }
 
-function LineChart({ data, xKey, yKey, yAsPercent = false }) {
+function LineChart({ data, xKey, yKey, yAsPercent = false, selectedIndex = null }) {
   const width = 680;
   const height = 220;
   const pad = { top: 16, right: 18, bottom: 28, left: 42 };
@@ -65,11 +65,28 @@ function LineChart({ data, xKey, yKey, yAsPercent = false }) {
   const yScale = (y) => height - pad.bottom - ((y - minY) / Math.max(maxY - minY, 0.01)) * (height - pad.top - pad.bottom);
   const path = values.map((d, i) => `${i === 0 ? "M" : "L"} ${xScale(d[xKey])} ${yScale(d[yKey])}`).join(" ");
   const last = values[values.length - 1];
+  const selected =
+    selectedIndex === null
+      ? last
+      : values[Math.max(0, Math.min(values.length - 1, Number(selectedIndex)))];
 
   return h("svg", { className: "chart", viewBox: `0 0 ${width} ${height}`, role: "img" }, [
     h("line", { x1: pad.left, y1: height - pad.bottom, x2: width - pad.right, y2: height - pad.bottom, stroke: "#dbe1e7" }),
     h("line", { x1: pad.left, y1: pad.top, x2: pad.left, y2: height - pad.bottom, stroke: "#dbe1e7" }),
     h("path", { d: path, className: "line-path" }),
+    selected && h("line", {
+      x1: xScale(selected[xKey]),
+      y1: pad.top,
+      x2: xScale(selected[xKey]),
+      y2: height - pad.bottom,
+      className: "selected-line",
+    }),
+    selected && h("circle", {
+      cx: xScale(selected[xKey]),
+      cy: yScale(selected[yKey]),
+      r: 6,
+      className: "selected-point",
+    }),
     h("circle", { cx: xScale(last[xKey]), cy: yScale(last[yKey]), r: 4, fill: "#0f766e" }),
     h("text", { x: pad.left, y: height - 8 }, String(xs[0])),
     h("text", { x: width - pad.right - 60, y: height - 8 }, String(xs[xs.length - 1])),
@@ -87,8 +104,47 @@ function TrendChart({ data }) {
   return h(LineChart, { data: chartData, xKey: "index", yKey: "acceptance_rate", yAsPercent: true });
 }
 
-function ProbabilityChart({ data }) {
-  return h(LineChart, { data, xKey: "offered_ctc", yKey: "acceptance_probability", yAsPercent: true });
+function ProbabilityChart({ data, currentOffer, suggestedOffer }) {
+  const values = data || [];
+  const targetOffer = suggestedOffer ?? currentOffer;
+  const initialIndex = values.length
+    ? values.reduce((best, row, index) => (
+        Math.abs(row.offered_ctc - targetOffer) < Math.abs(values[best].offered_ctc - targetOffer) ? index : best
+      ), 0)
+    : 0;
+  const [index, setIndex] = useState(initialIndex);
+
+  useEffect(() => {
+    if (!values.length) return;
+    setIndex(initialIndex);
+  }, [initialIndex, values.length]);
+
+  if (!values.length) return h(LineChart, { data: values, xKey: "offered_ctc", yKey: "acceptance_probability", yAsPercent: true });
+
+  const selected = values[Math.max(0, Math.min(values.length - 1, Number(index)))];
+  return h("div", { className: "probability-tool" }, [
+    h(LineChart, {
+      data: values,
+      xKey: "offered_ctc",
+      yKey: "acceptance_probability",
+      yAsPercent: true,
+      selectedIndex: index,
+    }),
+    h("div", { className: "slider-panel" }, [
+      h("input", {
+        type: "range",
+        min: 0,
+        max: values.length - 1,
+        value: index,
+        onChange: (event) => setIndex(Number(event.target.value)),
+        "aria-label": "Inspect offer CTC on probability curve",
+      }),
+      h("div", { className: "slider-readout" }, [
+        h("div", null, [h("span", null, "Inspected offer"), h("strong", null, fmtLpa(selected.offered_ctc))]),
+        h("div", null, [h("span", null, "Predicted acceptance"), h("strong", null, fmtPct(selected.acceptance_probability))]),
+      ]),
+    ]),
+  ]);
 }
 
 function Dashboard({ summary, candidates }) {
@@ -120,7 +176,7 @@ function Dashboard({ summary, candidates }) {
     ]),
     h("section", { className: "section grid-2", key: "benchmarks" }, [
       h("div", { className: "panel" }, [
-        h("div", { className: "panel-title" }, [h("h3", null, "Accepted CTC range"), h("span", null, "P20 / P50 / P80")]),
+        h("div", { className: "panel-title" }, [h("h3", null, "Accepted / joined CTC range"), h("span", null, "P20 / P50 / P80")]),
         h("div", { className: "result-band" }, [
           h("div", { className: "result-stat" }, [h("span", null, "P20"), h("strong", null, fmtLpa(summary.accepted_ctc_percentiles.p20))]),
           h("div", { className: "result-stat" }, [h("span", null, "P50"), h("strong", null, fmtLpa(summary.accepted_ctc_percentiles.p50))]),
@@ -274,67 +330,140 @@ function ResultPanel({ result }) {
   const benchmarkRecords = result.accepted_benchmark_records || [];
   const isOk = result.recommendation_status === "ok";
   const panelTitle = result.recommendation_status === "review_low_support" ? "Recommendation Review" : isOk ? "Recommendation" : "Escalation Review";
+  const filters = Object.entries(p.filters_used || {});
+  const filterSummary = filters.length
+    ? filters.map(([key, value]) => `${key}: ${value}`).join(", ")
+    : "no benchmark filters";
+  const acceptedCount = p.accepted_similar_records ?? benchmarkRecords.length;
+  const warnings = result.warnings || [];
   return h("div", { className: "panel" }, [
     h("div", { className: "panel-title" }, [
       h("h3", null, panelTitle),
       h("span", null, `${p.specificity} / ${p.confidence} match confidence`),
     ]),
     h("div", { className: isOk ? "notice good" : "notice warn" }, result.recommendation_message),
-    h("div", { className: "result-band" }, [
-      h("div", { className: "result-stat" }, [h("span", null, "Suggested CTC"), h("strong", null, fmtLpa(result.suggested_ctc))]),
-      h("div", { className: "result-stat" }, [h("span", null, "Current offer probability"), h("strong", null, fmtPct(result.acceptance_probability))]),
-      h("div", { className: "result-stat" }, [h("span", null, "Probability at suggested"), h("strong", null, fmtPct(result.probability_at_suggested_ctc))]),
+    h("div", { className: "decision-grid" }, [
+      h("div", { className: "decision-card current" }, [
+        h("span", null, "Current offer being evaluated"),
+        h("strong", null, fmtLpa(result.candidate.offered_ctc)),
+        h("div", { className: "paired-metric" }, [
+          h("span", null, "Acceptance probability at this offer"),
+          h("b", null, fmtPct(result.acceptance_probability)),
+        ]),
+      ]),
+      h("div", { className: "decision-card suggested" }, [
+        h("span", null, "Suggested CTC"),
+        h("strong", null, fmtLpa(result.suggested_ctc)),
+        h("div", { className: "paired-metric" }, [
+          h("span", null, "Acceptance probability at suggested CTC"),
+          h("b", null, fmtPct(result.probability_at_suggested_ctc)),
+        ]),
+      ]),
     ]),
-    h("div", { className: "result-band" }, [
-      h("div", { className: "result-stat" }, [h("span", null, "P20 accepted CTC"), h("strong", null, fmtLpa(p.p20_offered_ctc))]),
-      h("div", { className: "result-stat" }, [h("span", null, "P50 accepted CTC"), h("strong", null, fmtLpa(p.p50_offered_ctc))]),
-      h("div", { className: "result-stat" }, [h("span", null, "P80 accepted CTC"), h("strong", null, fmtLpa(p.p80_offered_ctc))]),
-    ]),
-    h("div", { className: "result-band" }, [
-      h("div", { className: "result-stat" }, [h("span", null, "Accepted benchmark records"), h("strong", null, p.accepted_similar_records)]),
-      h("div", { className: "result-stat" }, [h("span", null, "Skill + LOB records"), h("strong", null, result.profile_match.skill_lob_records)]),
-      h("div", { className: "result-stat" }, [h("span", null, "Target 70% offer"), h("strong", null, fmtLpa(result.target_offer_ctc))]),
-    ]),
-    h("div", { className: "result-band" }, [
-      h("div", { className: "result-stat" }, [h("span", null, "Max searched offer"), h("strong", null, fmtLpa(result.curve_max_offer_ctc))]),
-      h("div", { className: "result-stat" }, [h("span", null, "Probability at max"), h("strong", null, fmtPct(result.probability_at_curve_max))]),
-      h("div", { className: "result-stat" }, [h("span", null, "Primary skill support"), h("strong", null, result.category_support?.primary_skill ?? "-")]),
-    ]),
-    result.warnings.map((warning) => h("div", { className: "warning", key: warning }, warning)),
-    h("div", { className: "panel-title", style: { marginTop: 16 } }, [h("h3", null, "Acceptance probability curve"), h("span", null, "Offer CTC vs probability")]),
-    h(ProbabilityChart, { data: result.acceptance_curve }),
-    h("div", { className: "panel-title", style: { marginTop: 12 } }, [h("h3", null, "Benchmark filters used"), h("span", null, `${p.similar_records} similar offers`) ]),
-    h("div", null, Object.entries(p.filters_used).map(([key, value]) => h("span", { className: "tag", style: { marginRight: 6, marginBottom: 6 }, key }, `${key}: ${value}`))),
     h("div", { className: "panel-title", style: { marginTop: 16 } }, [
-      h("h3", null, "Accepted benchmark records"),
+      h("h3", null, "Successful Offer Benchmark Range"),
+      h("span", null, `${acceptedCount} accepted/joined records used for P20 / P50 / P80`),
+    ]),
+    h("p", { className: "explain" }, `Calculated from historical offers with status Accepted or Joined matching ${filterSummary}. Similarity rule: ${p.similarity_rule || "rule-based match"}.`),
+    h("div", { className: "result-band" }, [
+      h("div", { className: "result-stat" }, [h("span", null, "P20 successful CTC"), h("strong", null, fmtLpa(p.p20_offered_ctc))]),
+      h("div", { className: "result-stat" }, [h("span", null, "P50 successful CTC"), h("strong", null, fmtLpa(p.p50_offered_ctc))]),
+      h("div", { className: "result-stat" }, [h("span", null, "P80 successful CTC"), h("strong", null, fmtLpa(p.p80_offered_ctc))]),
+    ]),
+    h("div", { className: "panel-title", style: { marginTop: 16 } }, [
+      h("h3", null, "Successful Profiles Behind This Range"),
       h("span", null, `${benchmarkRecords.length} records shown`),
     ]),
     benchmarkRecords.length
       ? h("div", { className: "table-wrap benchmark-table" }, [
           h("table", null, [
-            h("thead", null, h("tr", null, ["Ref", "Date", "Skill", "LOB", "Location", "Band", "Current", "Expected", "Offered", "Hike", "Gap", "Source", "Status"].map((head) => h("th", { key: head }, head)))),
+            h("thead", null, h("tr", null, ["Ref", "Date", "Skill", "LOB", "Location", "Band", "Exp", "Current", "Expected", "Offered", "Hike", "Gap", "Source", "Status"].map((head) => h("th", { key: head }, head)))),
             h("tbody", null, benchmarkRecords.map((row) =>
-              h("tr", { key: `${row.candidate_ref}-${row.offer_date}` }, [
+              h("tr", { key: `${row.candidate_ref}-${row.offer_date}`, className: row.status === "Joined" ? "row-joined" : "row-accepted" }, [
                 h("td", null, row.candidate_ref),
                 h("td", null, row.offer_date),
                 h("td", null, row.primary_skill),
                 h("td", null, row.lob),
                 h("td", null, row.location),
                 h("td", null, h("span", { className: "tag" }, row.offered_band)),
+                h("td", null, `${Number(row.relevant_experience_years).toFixed(1)} yrs`),
                 h("td", null, fmtLpa(row.current_ctc)),
                 h("td", null, fmtLpa(row.expected_ctc)),
                 h("td", null, fmtLpa(row.offered_ctc)),
                 h("td", null, `${Number(row.offered_hike_pct).toFixed(1)}%`),
                 h("td", null, `${Number(row.offer_gap_pct).toFixed(1)}%`),
                 h("td", null, row.candidate_source),
-                h("td", null, h("span", { className: "tag good" }, row.status)),
+                h("td", null, h("span", { className: row.status === "Joined" ? "tag good" : "tag info" }, row.status)),
               ])
             )),
           ]),
         ])
-      : h("div", { className: "empty" }, "No accepted benchmark records found for the selected filters."),
+      : h("div", { className: "empty" }, "No accepted/joined benchmark records found for the selected filters."),
+    warnings.map((warning) => h("div", { className: "warning", key: warning }, warning)),
+    h("div", { className: "panel-title", style: { marginTop: 16 } }, [
+      h("h3", null, "Acceptance Probability Curve"),
+      h("span", null, "Move the slider to inspect offer values"),
+    ]),
+    h(ProbabilityChart, {
+      data: result.acceptance_curve,
+      currentOffer: result.candidate.offered_ctc,
+      suggestedOffer: result.suggested_ctc,
+    }),
+    h("div", { className: "panel-title", style: { marginTop: 16 } }, [
+      h("h3", null, "Benchmark Transparency"),
+      h("span", null, "Why this recommendation has this confidence"),
+    ]),
+    h("div", { className: "result-band compact-band" }, [
+      h("div", { className: "result-stat" }, [h("span", null, "Similar offers before acceptance filter"), h("strong", null, p.similar_records)]),
+      h("div", { className: "result-stat" }, [h("span", null, "Accepted/joined offers used for range"), h("strong", null, acceptedCount)]),
+      h("div", { className: "result-stat" }, [h("span", null, "Model 70% threshold"), h("strong", null, fmtLpa(result.target_offer_ctc)), h("em", null, "Reference only; not a separate recommendation")]),
+    ]),
+    h("div", { className: "result-band compact-band" }, [
+      h("div", { className: "result-stat" }, [h("span", null, "Skill + LOB coverage"), h("strong", null, result.profile_match.skill_lob_records), h("em", null, "All historical records with this skill and business unit")]),
+      h("div", { className: "result-stat" }, [h("span", null, "Exact profile records"), h("strong", null, result.profile_match.exact_profile_records), h("em", null, "Skill + LOB + location + band")]),
+      h("div", { className: "result-stat" }, [h("span", null, `Exact profile + ${result.profile_match.experience_band}`), h("strong", null, result.profile_match.experience_band_records), h("em", null, "Same profile near this experience level")]),
+    ]),
+    h("div", { className: "result-band compact-band" }, [
+      h("div", { className: "result-stat" }, [h("span", null, "Max searched offer"), h("strong", null, fmtLpa(result.curve_max_offer_ctc))]),
+      h("div", { className: "result-stat" }, [h("span", null, "Probability at max searched offer"), h("strong", null, fmtPct(result.probability_at_curve_max))]),
+      h("div", { className: "result-stat" }, [h("span", null, "Primary skill support"), h("strong", null, result.category_support?.primary_skill ?? "-")]),
+    ]),
+    h("div", { className: "panel-title", style: { marginTop: 12 } }, [h("h3", null, "Benchmark filters used"), h("span", null, `${p.similar_records} similar offers`) ]),
+    h("div", { className: "filter-tags" }, filters.map(([key, value]) => h("span", { className: "tag", key }, `${key}: ${value}`))),
+    h("div", { className: "panel-title", style: { marginTop: 16 } }, [
+      h("h3", null, "Fallback attempts"),
+      h("span", null, "Tried from most similar to broader"),
+    ]),
+    h(FallbackAttemptsTable, { attempts: p.fallback_attempts || [] }),
   ]);
-}
+  }
+
+  function FallbackAttemptsTable({ attempts }) {
+    if (!attempts.length) {
+      return h("div", { className: "empty" }, "No fallback attempts available.");
+    }
+
+    return h("div", { className: "table-wrap fallback-table" }, [
+      h("table", null, [
+        h("thead", null, h("tr", null, ["#", "Similarity rule", "Filters", "Similar", "Accepted/joined", "Success rate", "P20", "P50", "P80"].map((head) => h("th", { key: head }, head)))),
+        h("tbody", null, attempts.map((attempt, index) =>
+          h("tr", { key: `${index}-${JSON.stringify(attempt.filters_used)}` }, [
+            h("td", null, index + 1),
+            h("td", null, attempt.similarity_rule || "-"),
+            h("td", null, Object.entries(attempt.filters_used || {}).map(([key, value]) =>
+              h("span", { className: "tag", style: { marginRight: 4, marginBottom: 4 }, key }, `${key}: ${value}`)
+            )),
+            h("td", null, attempt.similar_records),
+            h("td", null, attempt.accepted_similar_records),
+            h("td", null, fmtPct(attempt.acceptance_rate)),
+            h("td", null, fmtLpa(attempt.p20_offered_ctc)),
+            h("td", null, fmtLpa(attempt.p50_offered_ctc)),
+            h("td", null, fmtLpa(attempt.p80_offered_ctc)),
+          ])
+        )),
+      ]),
+    ]);
+  }
 
 function App() {
   const [summary, setSummary] = useState(null);

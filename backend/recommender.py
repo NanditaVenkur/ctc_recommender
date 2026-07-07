@@ -59,9 +59,10 @@ def _summarize(subset: pd.DataFrame, filters: dict, min_records: int) -> dict:
     accepted_count = int(len(accepted))
     warning = None
     if accepted_count < min_records:
-        warning = f"Only {accepted_count} accepted records found. Broaden filters or treat recommendation cautiously."
+        warning = f"Only {accepted_count} accepted/joined records found. Broaden filters or treat recommendation cautiously."
     return {
         "filters_used": filters,
+        "similarity_rule": _similarity_rule(filters),
         "similar_records": int(len(subset)),
         "accepted_similar_records": accepted_count,
         "acceptance_rate": None if len(subset) == 0 else round(float(subset["accepted"].mean()), 3),
@@ -127,6 +128,19 @@ def _specificity_label(filters: dict) -> str:
     if count >= 2:
         return "Related segment"
     return "Broad benchmark"
+
+
+def _similarity_rule(filters: dict) -> str:
+    if not filters:
+        return "All historical accepted/joined offers"
+    labels = {
+        "primary_skill": "same primary skill",
+        "lob": "same LOB",
+        "location": "same location",
+        "city_tier": "same city tier",
+        "offered_band": "same offered band",
+    }
+    return " + ".join(labels.get(column, column) for column in filters)
 
 
 def _overall_confidence(specificity: str, sample_confidence: str) -> str:

@@ -297,13 +297,26 @@ def _profile_match_counts(df: pd.DataFrame, candidate: dict) -> dict:
         (df["primary_skill"] == candidate["primary_skill"])
         & (df["lob"] == candidate["lob"])
     ]
-    exact = skill_lob[
-        (skill_lob["location"] == candidate["location"])
-        & (skill_lob["offered_band"] == candidate["offered_band"])
+    exact_profile = df[
+        (df["primary_skill"] == candidate["primary_skill"])
+        & (df["lob"] == candidate["lob"])
+        & (df["location"] == candidate["location"])
+        & (df["offered_band"] == candidate["offered_band"])
+    ]
+    exact_experience = exact_profile[
+        exact_profile["relevant_experience_years"] == candidate["relevant_experience_years"]
+    ]
+    experience_low = candidate["relevant_experience_years"] - 2
+    experience_high = candidate["relevant_experience_years"] + 2
+    experience_band = exact_profile[
+        exact_profile["relevant_experience_years"].between(experience_low, experience_high, inclusive="both")
     ]
     return {
         "skill_lob_records": int(len(skill_lob)),
-        "exact_profile_records": int(len(exact)),
+        "exact_profile_records": int(len(exact_profile)),
+        "exact_experience_records": int(len(exact_experience)),
+        "experience_band_records": int(len(experience_band)),
+        "experience_band": f"{experience_low:.1f}-{experience_high:.1f} years",
     }
 
 
@@ -322,6 +335,7 @@ def _accepted_benchmark_records(df: pd.DataFrame, filters: dict) -> list[dict]:
         "location",
         "city_tier",
         "offered_band",
+        "relevant_experience_years",
         "current_ctc",
         "expected_ctc",
         "offered_ctc",
@@ -402,7 +416,7 @@ def _reconcile_signals(probability_at_offer: float, offered_ctc: float, benchmar
 
     if above_market and low_probability:
         return (
-            "Conflicting signal: offer is above the benchmark P80 for accepted candidates, "
+            "Conflicting signal: offer is above the benchmark P80 for accepted/joined candidates, "
             "yet the model predicts low acceptance. Check band fit, notice period, competing offers, "
             "or candidate-specific concerns before raising pay further."
         )

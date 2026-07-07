@@ -236,6 +236,17 @@ select {
   stroke-width: 2.5;
 }
 
+.selected-line {
+  stroke: #94a3b8;
+  stroke-dasharray: 4 4;
+}
+
+.selected-point {
+  fill: #ffffff;
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+
 .table-wrap {
   overflow-x: auto;
 }
@@ -249,6 +260,17 @@ select {
 
 .benchmark-table table {
   min-width: 980px;
+}
+
+.fallback-table {
+  max-height: 280px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.fallback-table table {
+  min-width: 920px;
 }
 
 table {
@@ -285,6 +307,11 @@ th {
 .tag.good {
   color: var(--good);
   background: #e9f8f2;
+}
+
+.tag.info {
+  color: #1d4ed8;
+  background: #eff6ff;
 }
 
 .tag.bad {
@@ -365,6 +392,10 @@ th {
   margin-top: 12px;
 }
 
+.compact-band .result-stat strong {
+  font-size: 18px;
+}
+
 .result-stat {
   padding: 12px;
   border: 1px solid var(--line);
@@ -382,6 +413,137 @@ th {
   display: block;
   margin-top: 6px;
   font-size: 20px;
+}
+
+.result-stat em {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1.35;
+  white-space: normal;
+}
+
+.decision-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.decision-card {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.decision-card.current {
+  border-left: 4px solid #2563eb;
+}
+
+.decision-card.suggested {
+  border-left: 4px solid var(--accent);
+}
+
+.decision-card > span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.decision-card > strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 28px;
+  line-height: 1;
+}
+
+.paired-metric {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.paired-metric span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.paired-metric b {
+  font-size: 22px;
+}
+
+.explain {
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.filter-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.probability-tool {
+  display: grid;
+  gap: 10px;
+}
+
+.slider-panel {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(220px, 0.55fr);
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.slider-panel input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.slider-readout {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.slider-readout div {
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: white;
+}
+
+.slider-readout span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.slider-readout strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 16px;
+}
+
+.row-joined td {
+  background: #f1fbf6;
+}
+
+.row-accepted td {
+  background: #f4f8ff;
 }
 
 .warning {
@@ -446,7 +608,10 @@ th {
   .grid-4,
   .grid-2,
   .form-grid,
-  .result-band {
+  .result-band,
+  .decision-grid,
+  .slider-panel,
+  .slider-readout {
     grid-template-columns: 1fr;
   }
 }
