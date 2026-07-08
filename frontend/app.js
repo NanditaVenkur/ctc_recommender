@@ -1,9 +1,18 @@
-const { createElement: h, useEffect, useMemo, useState } = React;
+const { createElement: h, useEffect, useMemo, useRef, useState } = React;
 
 const api = {
   summary: () => fetch("/api/summary").then((res) => res.json()),
   options: () => fetch("/api/options").then((res) => res.json()),
   candidates: () => fetch("/api/candidates?limit=24").then((res) => res.json()),
+  chat: (messages) =>
+    fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages }),
+    }).then((res) => {
+      if (!res.ok) return res.json().then((err) => Promise.reject(err));
+      return res.json();
+    }),
   recommend: (payload) =>
     fetch("/api/recommend", {
       method: "POST",
@@ -147,13 +156,31 @@ function ProbabilityChart({ data, currentOffer, suggestedOffer }) {
   ]);
 }
 
-function Dashboard({ summary, candidates }) {
+function Dashboard({ summary, candidates, onNavigate }) {
   const kpis = summary.kpis;
   const maxStatus = Math.max(...Object.values(summary.status_counts));
   const maxBand = Math.max(...summary.by_band.map((row) => row.offers));
   const maxSource = Math.max(...summary.by_source.map((row) => row.offers));
 
   return h("div", null, [
+    h("div", { className: "dashboard-header" }, [
+      h("h2", null, "Offer Intelligence"),
+      h("p", null, "Track offer outcomes, benchmark CTC ranges, and model health."),
+    ]),
+    summary.insight && h("div", { className: "insight-banner" }, [
+      h(Icon, { name: "sparkles", size: 16 }),
+      h("span", null, summary.insight),
+    ]),
+    h("div", { className: "quick-actions" }, [
+      h("button", { className: "action-card", onClick: () => onNavigate && onNavigate("simulator") }, [
+        h("div", { className: "action-icon sim" }, h(Icon, { name: "calculator", size: 22 })),
+        h("div", null, [h("strong", null, "Run offer simulator"), h("span", null, "Check a candidate CTC and acceptance probability")]),
+      ]),
+      h("button", { className: "action-card", onClick: () => onNavigate && onNavigate("table") }, [
+        h("div", { className: "action-icon tbl" }, h(Icon, { name: "table", size: 22 })),
+        h("div", null, [h("strong", null, "Review recent offers"), h("span", null, "Scan latest outcomes and CTCs")]),
+      ]),
+    ]),
     h("section", { className: "section", key: "kpis" }, [
       h("div", { className: "grid-4" }, [
         h(Metric, { label: "Total offers", value: kpis.total_offers, note: "Historical offer records" }),
@@ -229,6 +256,34 @@ function Dashboard({ summary, candidates }) {
             ])
           )),
         ]),
+      ]),
+    ]),
+  ]);
+}
+
+function RecentOffersTable({ candidates }) {
+  return h("section", { className: "section", key: "table" }, [
+    h("div", { className: "section-header" }, [
+      h("div", null, [h("h2", null, "Recent Offers"), h("p", null, "A quick view of offer amounts, hikes, and outcomes.")]),
+    ]),
+    h("div", { className: "panel table-wrap" }, [
+      h("table", null, [
+        h("thead", null, h("tr", null, ["Ref", "Date", "Skill", "LOB", "Location", "Band", "Current", "Expected", "Offered", "Hike", "Status"].map((head) => h("th", { key: head }, head)))),
+        h("tbody", null, candidates.map((row) =>
+          h("tr", { key: row.candidate_ref }, [
+            h("td", null, row.candidate_ref),
+            h("td", null, row.offer_date),
+            h("td", null, row.primary_skill),
+            h("td", null, row.lob),
+            h("td", null, row.location),
+            h("td", null, h("span", { className: "tag" }, row.offered_band)),
+            h("td", null, fmtLpa(row.current_ctc)),
+            h("td", null, fmtLpa(row.expected_ctc)),
+            h("td", null, fmtLpa(row.offered_ctc)),
+            h("td", null, `${Number(row.offered_hike_pct).toFixed(1)}%`),
+            h("td", null, h("span", { className: `tag ${row.status === "Joined" || row.status === "Accepted" ? "good" : "bad"}` }, row.status)),
+          ])
+        )),
       ]),
     ]),
   ]);
@@ -465,11 +520,94 @@ function ResultPanel({ result }) {
     ]);
   }
 
+function ChatPane({ onUiAction }) {
+  const [input, setInput] = useState("");
+  const [messages, setMessages] = useState([
+    {
+      role: "model",
+      content: "Hi. I can help explain offer benchmarks, run acceptance simulations, or open the dashboard views.",
+    },
+  ]);
+  const [isLoading, setIsLoading] = useState(false);
+  const endRef = useRef(null);
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, isLoading]);
+
+  function submit(event) {
+    event.preventDefault();
+    const content = input.trim();
+    if (!content || isLoading) return;
+
+    const nextMessages = [...messages, { role: "user", content }];
+    setMessages(nextMessages);
+    setInput("");
+    setIsLoading(true);
+
+    api.chat(nextMessages)
+      .then((data) => {
+        setMessages((current) => [...current, { role: "model", content: data.response || "I could not generate a response." }]);
+        (data.ui_actions || []).forEach((action) => onUiAction && onUiAction(action));
+      })
+      .catch((err) => {
+        setMessages((current) => [...current, { role: "model", content: err.detail || "The assistant could not connect. Check backend/.env and server logs." }]);
+      })
+      .finally(() => setIsLoading(false));
+  }
+
+  return h("aside", { className: "chat-pane" }, [
+    h("div", { className: "chat-header" }, [
+      h("h3", null, [h(Icon, { name: "bot", size: 18 }), "AI Recruiter Assistant"]),
+    ]),
+    h("div", { className: "chat-messages" }, [
+      messages.map((message, index) =>
+        h("div", { key: `${index}-${message.role}`, className: `chat-message ${message.role === "user" ? "user" : "model"}` },
+          String(message.content || "")
+            .split("\n")
+            .filter((line) => line.trim().length > 0)
+            .map((line, lineIndex) => h("p", { key: lineIndex }, line))
+        )
+      ),
+      isLoading && h("div", { className: "chat-typing" }, "Assistant is thinking..."),
+      h("div", { ref: endRef }),
+    ]),
+    h("form", { className: "chat-input-area chat-input-form", onSubmit: submit }, [
+      h("input", {
+        value: input,
+        onChange: (event) => setInput(event.target.value),
+        placeholder: "Ask about CTC, probability, benchmarks...",
+        disabled: isLoading,
+      }),
+      h("button", { type: "submit", disabled: isLoading || !input.trim(), "aria-label": "Send message" }, h(Icon, { name: "send", size: 18 })),
+    ]),
+  ]);
+}
+
+function RightCanvas({ summary, options, candidates, activeTab, setActiveTab }) {
+  const renderTab = () => {
+    if (activeTab === "dashboard") return h(Dashboard, { summary, candidates, onNavigate: setActiveTab });
+    if (activeTab === "simulator") return h(OfferSimulator, { options });
+    if (activeTab === "table") return h(RecentOffersTable, { candidates });
+    return h(Dashboard, { summary, candidates, onNavigate: setActiveTab });
+  };
+
+  return h("div", { className: "canvas-pane" }, [
+    h("div", { className: "tabs-header" }, [
+      h("button", { className: `tab-btn ${activeTab === "dashboard" ? "active" : ""}`, onClick: () => setActiveTab("dashboard") }, [h(Icon, { name: "layout-dashboard", size: 16 }), "Dashboard"]),
+      h("button", { className: `tab-btn ${activeTab === "simulator" ? "active" : ""}`, onClick: () => setActiveTab("simulator") }, [h(Icon, { name: "calculator", size: 16 }), "Simulator"]),
+      h("button", { className: `tab-btn ${activeTab === "table" ? "active" : ""}`, onClick: () => setActiveTab("table") }, [h(Icon, { name: "table", size: 16 }), "Recent Offers"]),
+    ]),
+    h("div", { className: "canvas-content" }, renderTab()),
+  ]);
+}
+
 function App() {
   const [summary, setSummary] = useState(null);
   const [options, setOptions] = useState(null);
   const [candidates, setCandidates] = useState([]);
   const [error, setError] = useState(null);
+  const [activeTab, setActiveTab] = useState("dashboard");
 
   useEffect(() => {
     Promise.all([api.summary(), api.options(), api.candidates()])
@@ -488,17 +626,23 @@ function App() {
   if (error) return h("div", { className: "empty" }, error);
   if (!summary || !options) return h("div", { className: "empty" }, "Loading HR offer intelligence...");
 
+  function handleUiAction(action) {
+    if (action.type === "FILTER_UI" && action.tab) {
+      setActiveTab(action.tab);
+    }
+  }
+
   return h("div", { className: "app" }, [
     h("header", { className: "topbar" }, [
       h("div", { className: "brand" }, [
         h("div", { className: "brand-mark" }, h(Icon, { name: "badge-indian-rupee" })),
-        h("div", null, [h("h1", null, "CTC Offer Intelligence"), h("p", null, "Historical offer analytics and acceptance probability support")]),
+        h("div", null, [h("h1", null, "CTC Offer Intelligence"), h("p", null, "AI-assisted offer analytics and acceptance probability support")]),
       ]),
       h("div", { className: "status-pill" }, [h(Icon, { name: "database", size: 16 }), `${summary.kpis.total_offers} offers loaded`]),
     ]),
-    h("main", { className: "content" }, [
-      h("div", null, h(Dashboard, { summary, candidates })),
-      h(OfferSimulator, { options }),
+    h("main", { className: "main-layout" }, [
+      h(ChatPane, { onUiAction: handleUiAction }),
+      h(RightCanvas, { summary, options, candidates, activeTab, setActiveTab }),
     ]),
   ]);
 }
