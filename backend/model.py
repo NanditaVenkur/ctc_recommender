@@ -12,7 +12,6 @@ from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-
 MODEL_FEATURES = [
     "current_ctc",
     "expected_ctc",
@@ -134,9 +133,15 @@ def candidate_to_feature_row(candidate: dict, offer: float) -> pd.DataFrame:
     return pd.DataFrame([row], columns=MODEL_FEATURES)
 
 
-def acceptance_curve(model: TrainedAcceptanceModel, candidate: dict, points: int = 40) -> list[dict]:
-    low = max(float(candidate["current_ctc"]) * 1.02, float(candidate["offered_ctc"]) * 0.75)
-    high = max(float(candidate["expected_ctc"]) * 1.6, float(candidate["offered_ctc"]) * 2.0)
+def acceptance_curve(
+    model: TrainedAcceptanceModel, candidate: dict, points: int = 40
+) -> list[dict]:
+    low = max(
+        float(candidate["current_ctc"]) * 1.02, float(candidate["offered_ctc"]) * 0.75
+    )
+    high = max(
+        float(candidate["expected_ctc"]) * 1.6, float(candidate["offered_ctc"]) * 2.0
+    )
     offers = np.linspace(low, high, points)
     rows = []
     for offer in offers:
@@ -151,14 +156,22 @@ def acceptance_curve(model: TrainedAcceptanceModel, candidate: dict, points: int
     return rows
 
 
-def predict_acceptance(model: TrainedAcceptanceModel, candidate: dict, offer: float) -> float:
+def predict_acceptance(
+    model: TrainedAcceptanceModel, candidate: dict, offer: float
+) -> float:
     features = candidate_to_feature_row(candidate, offer)
     return float(model.pipeline.predict_proba(features)[0, 1])
 
 
-def category_support(df: pd.DataFrame, candidate: dict, columns: list[str]) -> dict[str, int]:
+def category_support(
+    df: pd.DataFrame, candidate: dict, columns: list[str]
+) -> dict[str, int]:
     support = {}
     for column in columns:
         value = candidate.get(column)
-        support[column] = int((df[column] == value).sum()) if value is not None and column in df.columns else 0
+        support[column] = (
+            int((df[column] == value).sum())
+            if value is not None and column in df.columns
+            else 0
+        )
     return support

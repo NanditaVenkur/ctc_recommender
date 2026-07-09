@@ -3,7 +3,6 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-
 FALLBACK_LEVELS = {
     "strict": [
         ["primary_skill", "lob", "location", "offered_band"],
@@ -65,15 +64,34 @@ def _summarize(subset: pd.DataFrame, filters: dict, min_records: int) -> dict:
         "similarity_rule": _similarity_rule(filters),
         "similar_records": int(len(subset)),
         "accepted_similar_records": accepted_count,
-        "acceptance_rate": None if len(subset) == 0 else round(float(subset["accepted"].mean()), 3),
-        "p20_offered_ctc": None if np.isnan(percentiles.get(0.2, np.nan)) else round(float(percentiles[0.2]), 2),
-        "p50_offered_ctc": None if np.isnan(percentiles.get(0.5, np.nan)) else round(float(percentiles[0.5]), 2),
-        "p80_offered_ctc": None if np.isnan(percentiles.get(0.8, np.nan)) else round(float(percentiles[0.8]), 2),
+        "acceptance_rate": (
+            None if len(subset) == 0 else round(float(subset["accepted"].mean()), 3)
+        ),
+        "p20_offered_ctc": (
+            None
+            if np.isnan(percentiles.get(0.2, np.nan))
+            else round(float(percentiles[0.2]), 2)
+        ),
+        "p50_offered_ctc": (
+            None
+            if np.isnan(percentiles.get(0.5, np.nan))
+            else round(float(percentiles[0.5]), 2)
+        ),
+        "p80_offered_ctc": (
+            None
+            if np.isnan(percentiles.get(0.8, np.nan))
+            else round(float(percentiles[0.8]), 2)
+        ),
         "warning": warning,
     }
 
 
-def flexible_percentiles(data: pd.DataFrame, candidate: dict, flexibility: str = "balanced", min_records: int = 20) -> dict:
+def flexible_percentiles(
+    data: pd.DataFrame,
+    candidate: dict,
+    flexibility: str = "balanced",
+    min_records: int = 20,
+) -> dict:
     if flexibility not in FALLBACK_LEVELS:
         flexibility = "balanced"
 
@@ -88,7 +106,9 @@ def flexible_percentiles(data: pd.DataFrame, candidate: dict, flexibility: str =
     attempts = []
     best = None
     for level in FALLBACK_LEVELS[flexibility]:
-        filters = {field: exact[field] for field in level if exact.get(field) is not None}
+        filters = {
+            field: exact[field] for field in level if exact.get(field) is not None
+        }
         subset, applied = _filter(data, filters)
         summary = _summarize(subset, applied, min_records)
         attempts.append(summary)
@@ -96,19 +116,30 @@ def flexible_percentiles(data: pd.DataFrame, candidate: dict, flexibility: str =
         if summary["accepted_similar_records"] >= min_records:
             summary = dict(summary)
             summary["fallback_attempts"] = _serializable_attempts(attempts)
-            summary["sample_confidence"] = "High" if summary["accepted_similar_records"] >= min_records * 2 else "Medium"
+            summary["sample_confidence"] = (
+                "High"
+                if summary["accepted_similar_records"] >= min_records * 2
+                else "Medium"
+            )
             summary["specificity"] = _specificity_label(summary["filters_used"])
-            summary["confidence"] = _overall_confidence(summary["specificity"], summary["sample_confidence"])
+            summary["confidence"] = _overall_confidence(
+                summary["specificity"], summary["sample_confidence"]
+            )
             return summary
 
-        if best is None or summary["accepted_similar_records"] > best["accepted_similar_records"]:
+        if (
+            best is None
+            or summary["accepted_similar_records"] > best["accepted_similar_records"]
+        ):
             best = summary
 
     best = dict(best)
     best["fallback_attempts"] = _serializable_attempts(attempts)
     best["sample_confidence"] = "Low"
     best["specificity"] = _specificity_label(best["filters_used"])
-    best["confidence"] = _overall_confidence(best["specificity"], best["sample_confidence"])
+    best["confidence"] = _overall_confidence(
+        best["specificity"], best["sample_confidence"]
+    )
     return best
 
 

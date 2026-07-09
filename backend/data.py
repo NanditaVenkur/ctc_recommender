@@ -6,7 +6,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-
 ROOT = Path(__file__).resolve().parents[1]
 DATA_PATH = ROOT / "datasets" / "synthetic_hr_offer_acceptance_dataset.csv"
 DB_PATH = ROOT / "ctc_recommender.sqlite3"
@@ -56,8 +55,28 @@ NUMERIC_COLUMNS = [
     "age",
 ]
 
-TIER_1_CITIES = {"Bangalore", "Mumbai", "Delhi", "NCR", "Hyderabad", "Chennai", "Pune", "Kolkata"}
-TIER_2_CITIES = {"Noida", "Gurgaon", "Gurugram", "Ahmedabad", "Kochi", "Coimbatore", "Indore", "Jaipur", "Chandigarh", "Mysore"}
+TIER_1_CITIES = {
+    "Bangalore",
+    "Mumbai",
+    "Delhi",
+    "NCR",
+    "Hyderabad",
+    "Chennai",
+    "Pune",
+    "Kolkata",
+}
+TIER_2_CITIES = {
+    "Noida",
+    "Gurgaon",
+    "Gurugram",
+    "Ahmedabad",
+    "Kochi",
+    "Coimbatore",
+    "Indore",
+    "Jaipur",
+    "Chandigarh",
+    "Mysore",
+}
 
 
 def city_tier(location: object) -> str:
@@ -111,9 +130,15 @@ def load_clean_data() -> pd.DataFrame:
 
     df["city_tier"] = df["location"].apply(city_tier)
     df["accepted"] = df["status"].isin({"Joined", "Accepted"}).astype(int)
-    df["expected_hike_pct"] = (df["expected_ctc"] - df["current_ctc"]) / df["current_ctc"] * 100
-    df["offered_hike_pct"] = (df["offered_ctc"] - df["current_ctc"]) / df["current_ctc"] * 100
-    df["offer_gap_pct"] = (df["offered_ctc"] - df["expected_ctc"]) / df["expected_ctc"] * 100
+    df["expected_hike_pct"] = (
+        (df["expected_ctc"] - df["current_ctc"]) / df["current_ctc"] * 100
+    )
+    df["offered_hike_pct"] = (
+        (df["offered_ctc"] - df["current_ctc"]) / df["current_ctc"] * 100
+    )
+    df["offer_gap_pct"] = (
+        (df["offered_ctc"] - df["expected_ctc"]) / df["expected_ctc"] * 100
+    )
     df["offer_gap_amount"] = df["offered_ctc"] - df["expected_ctc"]
     df["offer_date"] = df["offer_date"].dt.strftime("%Y-%m-%d")
 
@@ -125,7 +150,9 @@ def init_db() -> None:
     with sqlite3.connect(DB_PATH) as conn:
         df.to_sql("offers", conn, if_exists="replace", index=False)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_offers_status ON offers(status)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_offers_profile ON offers(primary_skill, lob, location, offered_band)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_offers_profile ON offers(primary_skill, lob, location, offered_band)"
+        )
 
 
 def read_offers() -> pd.DataFrame:
@@ -133,4 +160,3 @@ def read_offers() -> pd.DataFrame:
         init_db()
     with sqlite3.connect(DB_PATH) as conn:
         return pd.read_sql_query("SELECT * FROM offers", conn)
-

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from enum import Enum
-from pathlib import Path
 
 import pandas as pd
 from fastapi import FastAPI
@@ -11,9 +10,13 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .data import ROOT, city_tier, init_db, read_offers
-from .model import acceptance_curve, category_support, predict_acceptance, train_acceptance_model
+from .model import (
+    acceptance_curve,
+    category_support,
+    predict_acceptance,
+    train_acceptance_model,
+)
 from .recommender import flexible_percentiles
-
 
 FRONTEND_DIR = ROOT / "frontend"
 TARGET_PROBABILITY = 0.70
@@ -82,9 +85,23 @@ def health() -> dict:
 @app.get("/api/options")
 def options() -> dict:
     df = state["df"]
-    fields = ["offered_band", "candidate_source", "lob", "primary_skill", "previous_company_type", "location", "city_tier"]
+    fields = [
+        "offered_band",
+        "candidate_source",
+        "lob",
+        "primary_skill",
+        "previous_company_type",
+        "location",
+        "city_tier",
+    ]
     return {
-        field: sorted([value for value in df[field].dropna().unique().tolist() if str(value) != "nan"])
+        field: sorted(
+            [
+                value
+                for value in df[field].dropna().unique().tolist()
+                if str(value) != "nan"
+            ]
+        )
         for field in fields
     }
 
@@ -103,11 +120,19 @@ def summary() -> dict:
         .reset_index()
         .sort_values(["offer_year", "offer_month"])
     )
-    trend["period"] = trend["offer_year"].astype(int).astype(str) + "-" + trend["offer_month"].astype(int).astype(str).str.zfill(2)
+    trend["period"] = (
+        trend["offer_year"].astype(int).astype(str)
+        + "-"
+        + trend["offer_month"].astype(int).astype(str).str.zfill(2)
+    )
 
     by_band = (
         df.groupby("offered_band")
-        .agg(offers=("accepted", "count"), acceptance_rate=("accepted", "mean"), median_ctc=("offered_ctc", "median"))
+        .agg(
+            offers=("accepted", "count"),
+            acceptance_rate=("accepted", "mean"),
+            median_ctc=("offered_ctc", "median"),
+        )
         .reset_index()
         .sort_values("offered_band")
     )
@@ -133,7 +158,11 @@ def summary() -> dict:
         },
         "status_counts": status_counts,
         "trend": [
-            {"period": row["period"], "offers": int(row["count"]), "acceptance_rate": round(float(row["mean"]), 3)}
+            {
+                "period": row["period"],
+                "offers": int(row["count"]),
+                "acceptance_rate": round(float(row["mean"]), 3),
+            }
             for row in trend.to_dict(orient="records")
         ],
         "by_band": [
@@ -146,7 +175,11 @@ def summary() -> dict:
             for row in by_band.to_dict(orient="records")
         ],
         "by_source": [
-            {"source": row["candidate_source"], "offers": int(row["offers"]), "acceptance_rate": round(float(row["acceptance_rate"]), 3)}
+            {
+                "source": row["candidate_source"],
+                "offers": int(row["offers"]),
+                "acceptance_rate": round(float(row["acceptance_rate"]), 3),
+            }
             for row in by_source.to_dict(orient="records")
         ],
         "accepted_ctc_percentiles": {
@@ -188,7 +221,12 @@ def recommend(payload: CandidateRequest) -> dict:
 
     probability = predict_acceptance(model, candidate, candidate["offered_ctc"])
     curve = acceptance_curve(model, candidate)
-    percentiles = flexible_percentiles(df, candidate, flexibility=payload.flexibility, min_records=MIN_BENCHMARK_RECORDS)
+    percentiles = flexible_percentiles(
+        df,
+        candidate,
+        flexibility=payload.flexibility,
+        min_records=MIN_BENCHMARK_RECORDS,
+    )
 
     target_offer_ctc = None
     curve_max_offer = curve[-1]["offered_ctc"]
@@ -208,12 +246,23 @@ def recommend(payload: CandidateRequest) -> dict:
         benchmark_p80=benchmark_p80,
     )
 
-    probability_at_suggested = predict_acceptance(model, candidate, suggested) if suggested is not None else None
+    probability_at_suggested = (
+        predict_acceptance(model, candidate, suggested)
+        if suggested is not None
+        else None
+    )
     profile_match = _profile_match_counts(df, candidate)
-    support = category_support(df, candidate, ["primary_skill", "lob", "offered_band", "location"])
-    if rec_status == RecommendationStatus.OK and profile_match["skill_lob_records"] == 0:
+    support = category_support(
+        df, candidate, ["primary_skill", "lob", "offered_band", "location"]
+    )
+    if (
+        rec_status == RecommendationStatus.OK
+        and profile_match["skill_lob_records"] == 0
+    ):
         rec_status = RecommendationStatus.REVIEW_LOW_SUPPORT
-    benchmark_records = _accepted_benchmark_records(df, percentiles.get("filters_used", {}))
+    benchmark_records = _accepted_benchmark_records(
+        df, percentiles.get("filters_used", {})
+    )
 
     return {
         "candidate": candidate,
@@ -221,8 +270,14 @@ def recommend(payload: CandidateRequest) -> dict:
         "recommendation_message": _recommendation_status_message(rec_status),
         "acceptance_probability": round(probability, 3),
         "suggested_ctc": None if suggested is None else round(float(suggested), 2),
-        "probability_at_suggested_ctc": None if probability_at_suggested is None else round(float(probability_at_suggested), 3),
-        "target_offer_ctc": None if target_offer_ctc is None else round(float(target_offer_ctc), 2),
+        "probability_at_suggested_ctc": (
+            None
+            if probability_at_suggested is None
+            else round(float(probability_at_suggested), 3)
+        ),
+        "target_offer_ctc": (
+            None if target_offer_ctc is None else round(float(target_offer_ctc), 2)
+        ),
         "target_probability": TARGET_PROBABILITY,
         "curve_max_offer_ctc": round(float(curve_max_offer), 2),
         "probability_at_curve_max": round(float(probability_at_curve_max), 3),
@@ -273,10 +328,16 @@ def _choose_suggested_ctc(
     if benchmark_p80 is not None and target_offer_ctc > benchmark_p80 * 1.05:
         return None, RecommendationStatus.ESCALATE_ABOVE_MARKET
 
-    if benchmark_p80 is not None and offered_ctc > benchmark_p80 and probability_at_offer < min_probability_ok:
+    if (
+        benchmark_p80 is not None
+        and offered_ctc > benchmark_p80
+        and probability_at_offer < min_probability_ok
+    ):
         return None, RecommendationStatus.ESCALATE_LOW_PROB
 
-    suggested = max(offered_ctc, min(target_offer_ctc, benchmark_p80 or target_offer_ctc))
+    suggested = max(
+        offered_ctc, min(target_offer_ctc, benchmark_p80 or target_offer_ctc)
+    )
     return suggested, RecommendationStatus.OK
 
 
@@ -304,12 +365,15 @@ def _profile_match_counts(df: pd.DataFrame, candidate: dict) -> dict:
         & (df["offered_band"] == candidate["offered_band"])
     ]
     exact_experience = exact_profile[
-        exact_profile["relevant_experience_years"] == candidate["relevant_experience_years"]
+        exact_profile["relevant_experience_years"]
+        == candidate["relevant_experience_years"]
     ]
     experience_low = candidate["relevant_experience_years"] - 2
     experience_high = candidate["relevant_experience_years"] + 2
     experience_band = exact_profile[
-        exact_profile["relevant_experience_years"].between(experience_low, experience_high, inclusive="both")
+        exact_profile["relevant_experience_years"].between(
+            experience_low, experience_high, inclusive="both"
+        )
     ]
     return {
         "skill_lob_records": int(len(skill_lob)),
@@ -373,7 +437,9 @@ def _recommendation_warnings(
     if recommendation_status != RecommendationStatus.OK:
         warnings.append(_recommendation_status_message(recommendation_status))
     if percentiles.get("specificity") == "Broad benchmark":
-        warnings.append("The CTC range is based on a broad benchmark, not a close profile match.")
+        warnings.append(
+            "The CTC range is based on a broad benchmark, not a close profile match."
+        )
 
     low_support_cols = [column for column, count in support.items() if count < 15]
     if low_support_cols:
@@ -384,11 +450,19 @@ def _recommendation_warnings(
         )
 
     if profile_match["skill_lob_records"] == 0:
-        warnings.append("No historical records match this skill and LOB combination. Check whether the selected skill belongs to this business unit.")
+        warnings.append(
+            "No historical records match this skill and LOB combination. Check whether the selected skill belongs to this business unit."
+        )
     elif profile_match["exact_profile_records"] == 0:
-        warnings.append("No exact historical records match this skill, LOB, location, and band combination.")
+        warnings.append(
+            "No exact historical records match this skill, LOB, location, and band combination."
+        )
 
-    if target_offer_ctc is not None and benchmark_p80 is not None and target_offer_ctc > benchmark_p80:
+    if (
+        target_offer_ctc is not None
+        and benchmark_p80 is not None
+        and target_offer_ctc > benchmark_p80
+    ):
         warnings.append(
             f"The model reaches the 70% probability target near {target_offer_ctc:.2f} LPA, "
             f"which is above the benchmark P80 of {benchmark_p80:.2f} LPA. Treat this as an escalation case, not an automatic offer."
@@ -407,7 +481,9 @@ def _recommendation_warnings(
     return warnings
 
 
-def _reconcile_signals(probability_at_offer: float, offered_ctc: float, benchmark_p80: float | None) -> str | None:
+def _reconcile_signals(
+    probability_at_offer: float, offered_ctc: float, benchmark_p80: float | None
+) -> str | None:
     if benchmark_p80 is None:
         return None
 

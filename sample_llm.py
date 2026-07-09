@@ -1,6 +1,8 @@
 import requests
 
-BASE_URL = "https://radeon-global.anruicloud.com/instances/hf-180-1a071167/proxy/8000/v1"
+BASE_URL = (
+    "https://radeon-global.anruicloud.com/instances/hf-180-1a071167/proxy/8000/v1"
+)
 MODEL = "Qwen/Qwen2.5-7B-Instruct"
 
 payload = {
@@ -8,7 +10,7 @@ payload = {
     "messages": [
         {
             "role": "user",
-            "content": "Explain what a large language model is in one sentence."
+            "content": "Explain what a large language model is in one sentence.",
         }
     ],
     "temperature": 0.7,
@@ -27,5 +29,3 @@ print(response.json())
 if response.status_code == 200:
     print("\nAssistant:")
     print(response.json()["choices"][0]["message"]["content"])
-
-
