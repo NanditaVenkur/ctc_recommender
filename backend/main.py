@@ -2,17 +2,28 @@ from __future__ import annotations
 
 from enum import Enum
 
+import io
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .agent import chat_with_agent
-from .data import ROOT, city_tier, init_db, read_offers
+from .data import (
+    ROOT,
+    city_tier,
+    init_db,
+    read_offers,
+    map_dataframe_columns,
+    clean_and_prepare_uploaded_data,
+    update_db_with_df,
+)
 from .model import acceptance_curve, category_support, predict_acceptance, train_acceptance_model
+from .negotiation import run_negotiation
 from .recommender import flexible_percentiles
+from .risk_agent import scan_at_risk_offers
 
 
 FRONTEND_DIR = ROOT / "frontend"
@@ -57,6 +68,25 @@ class CandidateRequest(BaseModel):
     joining_bonus: int = 0
     relocation: int = 0
     flexibility: str = "balanced"
+
+
+class NegotiationRequest(BaseModel):
+    current_ctc: float = Field(gt=0)
+    expected_ctc: float = Field(gt=0)
+    offered_ctc: float = Field(gt=0)
+    relevant_experience_years: float = Field(ge=0)
+    notice_period_days: float = Field(ge=0)
+    offered_band: str
+    candidate_source: str
+    lob: str
+    primary_skill: str
+    previous_company_type: str
+    location: str
+    joining_bonus: int = 0
+    relocation: int = 0
+    target_probability: float = Field(default=0.75, gt=0, lt=1)
+    max_rounds: int = Field(default=6, ge=1, le=12)
+    budget_cap: float | None = Field(default=None, gt=0)
 
 
 app = FastAPI(title="CTC Offer Recommender")
@@ -300,6 +330,93 @@ def recommend(payload: CandidateRequest) -> dict:
             probability_at_curve_max=probability_at_curve_max,
         ),
     }
+
+
+@app.post("/api/negotiate")
+def negotiate(payload: NegotiationRequest) -> dict:
+    candidate = payload.model_dump(exclude={"target_probability", "max_rounds", "budget_cap"})
+    candidate["city_tier"] = city_tier(candidate["location"])
+
+    df = state["df"]
+    model = state["model"]
+    _apply_latest_offer_period(candidate, df)
+
+    result = run_negotiation(
+        df,
+        model,
+        candidate,
+        target_probability=payload.target_probability,
+        max_rounds=payload.max_rounds,
+        budget_cap=payload.budget_cap,
+    )
+    result["candidate"] = candidate
+    return result
+
+
+@app.get("/api/risk-scan")
+def risk_scan(queue_size: int = 40, risk_threshold: float = 0.55, top_n: int = 10) -> dict:
+    df = state["df"]
+    model = state["model"]
+    return scan_at_risk_offers(df, model, queue_size=queue_size, risk_threshold=risk_threshold, top_n=top_n)
+
+
+@app.post("/api/upload")
+async def upload_file(file: UploadFile = File(...)) -> dict:
+    filename = file.filename or "uploaded_file"
+    content = await file.read()
+    
+    # Save the file to the datasets directory on disk
+    datasets_dir = ROOT / "datasets"
+    datasets_dir.mkdir(parents=True, exist_ok=True)
+    save_path = datasets_dir / filename
+    try:
+        with open(save_path, "wb") as f:
+            f.write(content)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save file to datasets folder: {str(e)}")
+        
+    try:
+        if filename.endswith(".csv"):
+            df_raw = pd.read_csv(io.BytesIO(content))
+        elif filename.endswith((".xlsx", ".xls")):
+            df_raw = pd.read_excel(io.BytesIO(content))
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Only CSV or Excel (.xlsx, .xls) files are supported."
+            )
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(status_code=400, detail=f"Failed to parse file: {str(e)}")
+        
+    try:
+        df_mapped = map_dataframe_columns(df_raw)
+        
+        mandatory = ["offered_band", "current_ctc", "expected_ctc", "offered_ctc", "status", "relevant_experience_years"]
+        missing = [col for col in mandatory if col not in df_mapped.columns]
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Missing mandatory columns (or unrecognized synonyms): {', '.join(missing)}"
+            )
+            
+        df_cleaned = clean_and_prepare_uploaded_data(df_mapped)
+        update_db_with_df(df_cleaned)
+        
+        state["df"] = df_cleaned
+        state["model"] = train_acceptance_model(df_cleaned)
+        
+        return {
+            "success": True,
+            "message": f"Successfully loaded {len(df_cleaned)} records and re-trained model.",
+            "metrics": state["model"].metrics,
+            "record_count": len(df_cleaned),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal processing error: {str(e)}")
 
 
 @app.post("/api/chat")

@@ -22,6 +22,20 @@ const api = {
       if (!res.ok) return res.json().then((err) => Promise.reject(err));
       return res.json();
     }),
+  negotiate: (payload) =>
+    fetch("/api/negotiate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).then((res) => {
+      if (!res.ok) return res.json().then((err) => Promise.reject(err));
+      return res.json();
+    }),
+  riskScan: (params) =>
+    fetch(`/api/risk-scan?${new URLSearchParams(params)}`).then((res) => {
+      if (!res.ok) return res.json().then((err) => Promise.reject(err));
+      return res.json();
+    }),
 };
 
 function fmtPct(value) {
@@ -520,6 +534,264 @@ function ResultPanel({ result }) {
     ]);
   }
 
+function NegotiationSimulator({ options }) {
+  const defaults = useMemo(() => ({
+    current_ctc: 15,
+    expected_ctc: 22,
+    offered_ctc: 17,
+    relevant_experience_years: 6,
+    notice_period_days: 60,
+    offered_band: options.offered_band?.[0] || "E2",
+    candidate_source: options.candidate_source?.[0] || "Direct",
+    lob: options.lob?.[0] || "Digital",
+    primary_skill: options.primary_skill?.[0] || "Java Spring",
+    previous_company_type: options.previous_company_type?.[0] || "Service",
+    location: options.location?.[0] || "Bangalore",
+    joining_bonus: 0,
+    relocation: 0,
+    target_probability: 0.75,
+    max_rounds: 6,
+  }), [options]);
+
+  const [form, setForm] = useState(defaults);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+  const [isRunning, setIsRunning] = useState(false);
+
+  useEffect(() => setForm(defaults), [defaults]);
+
+  function setField(key, value) {
+    setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  function submit(event) {
+    event.preventDefault();
+    setError(null);
+    setIsRunning(true);
+    api.negotiate({
+      ...form,
+      current_ctc: Number(form.current_ctc),
+      expected_ctc: Number(form.expected_ctc),
+      offered_ctc: Number(form.offered_ctc),
+      relevant_experience_years: Number(form.relevant_experience_years),
+      notice_period_days: Number(form.notice_period_days),
+      joining_bonus: Number(form.joining_bonus),
+      relocation: Number(form.relocation),
+      target_probability: Number(form.target_probability),
+      max_rounds: Number(form.max_rounds),
+    })
+      .then(setResult)
+      .catch((err) => setError(err.detail || "Unable to run negotiation"))
+      .finally(() => setIsRunning(false));
+  }
+
+  const select = (key, label, values) =>
+    h("div", { className: "field" }, [
+      h("label", null, label),
+      h("select", { value: form[key], onChange: (e) => setField(key, e.target.value) },
+        (values || []).map((value) => h("option", { key: value, value }, value))
+      ),
+    ]);
+
+  const input = (key, label, step = "0.1") =>
+    h("div", { className: "field" }, [
+      h("label", null, label),
+      h("input", { type: "number", step, value: form[key], onChange: (e) => setField(key, e.target.value) }),
+    ]);
+
+  return h("aside", null, [
+    h("section", { className: "section" }, [
+      h("div", { className: "section-header" }, [
+        h("div", null, [
+          h("h2", null, "Negotiation Twin"),
+          h("p", null, "A Recruiter Agent and a Candidate Agent negotiate CTC round by round, grounded by the same acceptance model."),
+        ]),
+      ]),
+      h("form", { className: "form-panel", onSubmit: submit }, [
+        h("div", { className: "form-grid" }, [
+          input("current_ctc", "Current CTC"),
+          input("expected_ctc", "Expected CTC"),
+          input("offered_ctc", "Opening offer"),
+          input("relevant_experience_years", "Experience"),
+          input("notice_period_days", "Notice period", "1"),
+          select("offered_band", "Band", options.offered_band),
+          select("lob", "LOB", options.lob),
+          select("primary_skill", "Primary skill", options.primary_skill),
+          select("location", "Location", options.location),
+          select("previous_company_type", "Company type", options.previous_company_type),
+          select("candidate_source", "Source", options.candidate_source),
+          select("joining_bonus", "Joining bonus", [0, 1]),
+          select("relocation", "Relocation", [0, 1]),
+          select("target_probability", "Target acceptance", [0.6, 0.65, 0.7, 0.75, 0.8, 0.85]),
+          select("max_rounds", "Max rounds", [3, 4, 5, 6, 7, 8]),
+        ]),
+        h("div", { className: "actions" }, [
+          h("button", { className: "primary-button", type: "submit", disabled: isRunning }, [
+            h(Icon, { name: "handshake" }),
+            isRunning ? "Negotiating..." : "Run negotiation",
+          ]),
+        ]),
+        error && h("div", { className: "warning" }, error),
+      ]),
+    ]),
+    h("section", { className: "section" }, result ? h(NegotiationResult, { result }) : h("div", { className: "empty" }, "Run the negotiation to see the Recruiter Agent and Candidate Agent converge on a CTC.")),
+  ]);
+}
+
+function NegotiationResult({ result }) {
+  const statusTone = result.status === "agreed" ? "good" : result.status === "impasse" ? "bad" : "warn";
+  const statusLabel = { agreed: "Agreement reached", impasse: "Impasse", max_rounds_reached: "No agreement within round limit" }[result.status] || result.status;
+  const chartData = (result.rounds || []).map((r) => ({ round: r.round, acceptance_probability: r.acceptance_probability }));
+
+  return h("div", { className: "panel" }, [
+    h("div", { className: "panel-title" }, [
+      h("h3", null, "Negotiation Outcome"),
+      h("span", null, `${result.rounds.length} round(s)`),
+    ]),
+    h("div", { className: `notice ${statusTone === "good" ? "good" : "warn"}` }, `${statusLabel}. ${result.summary}`),
+    h("div", { className: "decision-grid" }, [
+      h("div", { className: "decision-card current" }, [
+        h("span", null, "Final offer"),
+        h("strong", null, fmtLpa(result.final_offer)),
+        h("div", { className: "paired-metric" }, [
+          h("span", null, "Predicted acceptance"),
+          h("b", null, fmtPct(result.final_probability)),
+        ]),
+      ]),
+      h("div", { className: "decision-card suggested" }, [
+        h("span", null, "Authorized budget ceiling"),
+        h("strong", null, fmtLpa(result.budget_cap)),
+        h("div", { className: "paired-metric" }, [
+          h("span", null, "Target acceptance"),
+          h("b", null, fmtPct(result.target_probability)),
+        ]),
+      ]),
+    ]),
+    h("div", { className: "panel-title", style: { marginTop: 16 } }, [
+      h("h3", null, "Negotiation Transcript"),
+      h("span", null, "Recruiter Agent vs. Candidate Agent"),
+    ]),
+    h("div", { className: "negotiation-transcript" }, (result.rounds || []).flatMap((r) => [
+      h("div", { className: "negotiation-turn recruiter", key: `${r.round}-r` }, [
+        h("span", { className: "negotiation-round-tag" }, `Round ${r.round}`),
+        h("p", null, r.recruiter_message),
+      ]),
+      h("div", { className: "negotiation-turn candidate", key: `${r.round}-c` }, [
+        h("p", null, r.candidate_message),
+      ]),
+    ])),
+    h("div", { className: "panel-title", style: { marginTop: 16 } }, [
+      h("h3", null, "Acceptance Probability by Round"),
+    ]),
+    h(LineChart, { data: chartData, xKey: "round", yKey: "acceptance_probability", yAsPercent: true }),
+    h("div", { className: "panel-title", style: { marginTop: 16 } }, [
+      h("h3", null, "Round-by-Round Detail"),
+    ]),
+    h("div", { className: "table-wrap" }, [
+      h("table", null, [
+        h("thead", null, h("tr", null, ["Round", "Recruiter offer", "Candidate ask", "Acceptance probability"].map((head) => h("th", { key: head }, head)))),
+        h("tbody", null, (result.rounds || []).map((r) =>
+          h("tr", { key: r.round }, [
+            h("td", null, r.round),
+            h("td", null, fmtLpa(r.recruiter_offer)),
+            h("td", null, fmtLpa(r.candidate_ask)),
+            h("td", null, fmtPct(r.acceptance_probability)),
+          ])
+        )),
+      ]),
+    ]),
+  ]);
+}
+
+function RiskRadar() {
+  const [scan, setScan] = useState(null);
+  const [error, setError] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [expanded, setExpanded] = useState(null);
+
+  function runScan() {
+    setIsLoading(true);
+    setError(null);
+    api.riskScan({ queue_size: 40, risk_threshold: 0.55, top_n: 10 })
+      .then(setScan)
+      .catch((err) => setError(err.detail || "Unable to run risk scan"))
+      .finally(() => setIsLoading(false));
+  }
+
+  useEffect(() => {
+    runScan();
+  }, []);
+
+  useEffect(() => {
+    if (!autoRefresh) return undefined;
+    const id = setInterval(runScan, 20000);
+    return () => clearInterval(id);
+  }, [autoRefresh]);
+
+  const flagged = scan?.flagged_offers || [];
+
+  return h("div", null, [
+    h("div", { className: "dashboard-header" }, [
+      h("h2", null, "Risk Radar"),
+      h("p", null, "An agent proactively scans the most recent offers and drafts escalation alerts for the ones at risk of being declined - no one has to ask it."),
+    ]),
+    h("div", { className: "quick-actions", style: { gridTemplateColumns: "auto auto 1fr" } }, [
+      h("button", { className: "action-card", onClick: runScan, disabled: isLoading, style: { flex: "0 0 auto" } }, [
+        h("div", { className: "action-icon sim" }, h(Icon, { name: "radar", size: 22 })),
+        h("div", null, [h("strong", null, isLoading ? "Scanning..." : "Run scan now"), h("span", null, "Re-score the most recent offers")]),
+      ]),
+      h("label", { className: "action-card", style: { cursor: "pointer" } }, [
+        h("input", {
+          type: "checkbox",
+          checked: autoRefresh,
+          onChange: (e) => setAutoRefresh(e.target.checked),
+          style: { width: 18, height: 18 },
+        }),
+        h("div", null, [h("strong", null, "Auto-refresh"), h("span", null, "Re-scan every 20 seconds")]),
+      ]),
+    ]),
+    error && h("div", { className: "warning" }, error),
+    scan && h("div", { className: "result-band compact-band" }, [
+      h("div", { className: "result-stat" }, [h("span", null, "Offers scanned"), h("strong", null, scan.queue_scanned)]),
+      h("div", { className: "result-stat" }, [h("span", null, "Flagged as at-risk"), h("strong", null, scan.flagged_count)]),
+      h("div", { className: "result-stat" }, [h("span", null, "Risk threshold"), h("strong", null, fmtPct(scan.risk_threshold))]),
+    ]),
+    h("section", { className: "section", style: { marginTop: 16 } }, [
+      h("div", { className: "panel-title" }, [
+        h("h3", null, "Flagged Offers"),
+        h("span", null, "Sorted by lowest predicted acceptance first"),
+      ]),
+      flagged.length
+        ? h("div", { className: "table-wrap" }, [
+            h("table", null, [
+              h("thead", null, h("tr", null, ["Urgency", "Ref", "Skill", "Band", "Offered", "Acceptance", "Suggested CTC", "Actual outcome", ""].map((head) => h("th", { key: head }, head)))),
+              h("tbody", null, flagged.flatMap((row) => ([
+                h("tr", { key: row.candidate_ref }, [
+                  h("td", null, h("span", { className: `tag ${row.urgency === "High" ? "bad" : "info"}` }, row.urgency)),
+                  h("td", null, row.candidate_ref),
+                  h("td", null, row.primary_skill),
+                  h("td", null, h("span", { className: "tag" }, row.offered_band)),
+                  h("td", null, fmtLpa(row.offered_ctc)),
+                  h("td", null, fmtPct(row.acceptance_probability)),
+                  h("td", null, row.suggested_ctc ? fmtLpa(row.suggested_ctc) : "Needs review"),
+                  h("td", null, h("span", { className: `tag ${row.actual_outcome === "Joined" || row.actual_outcome === "Accepted" ? "good" : "bad"}` }, row.actual_outcome)),
+                  h("td", null, h("button", {
+                    className: "icon-button",
+                    onClick: () => setExpanded(expanded === row.candidate_ref ? null : row.candidate_ref),
+                  }, expanded === row.candidate_ref ? "Hide" : "Alert")),
+                ]),
+                expanded === row.candidate_ref && h("tr", { key: `${row.candidate_ref}-alert` }, [
+                  h("td", { colSpan: 9 }, h("div", { className: "notice warn", style: { margin: 0 } }, row.alert_message)),
+                ]),
+              ]))),
+            ]),
+          ])
+        : h("div", { className: "empty" }, isLoading ? "Scanning..." : "No at-risk offers found in the current queue."),
+    ]),
+  ]);
+}
+
 function ChatPane({ onUiAction }) {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState([
@@ -530,10 +802,58 @@ function ChatPane({ onUiAction }) {
   ]);
   const [isLoading, setIsLoading] = useState(false);
   const endRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isLoading]);
+
+  function triggerFileUpload() {
+    fileInputRef.current?.click();
+  }
+
+  function handleFileChange(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    event.target.value = "";
+    setIsLoading(true);
+    setMessages((current) => [...current, { role: "user", content: `Uploading Excel/CSV data file: ${file.name}` }]);
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    fetch("/api/upload", {
+      method: "POST",
+      body: formData,
+    })
+      .then((res) => {
+        if (!res.ok) return res.json().then((err) => Promise.reject(err));
+        return res.json();
+      })
+      .then((data) => {
+        setMessages((current) => [
+          ...current,
+          {
+            role: "model",
+            content: `Successfully uploaded ${file.name} (${data.record_count} records). The acceptance model has been re-trained (ROC AUC: ${data.metrics.roc_auc}). The dashboard and options have been updated!`,
+          },
+        ]);
+        if (onUiAction) {
+          onUiAction({ type: "DATA_UPDATED" });
+        }
+      })
+      .catch((err) => {
+        setMessages((current) => [
+          ...current,
+          {
+            role: "model",
+            content: `Upload failed: ${err.detail || err.message || "Unknown error"}`,
+          },
+        ]);
+      })
+      .finally(() => setIsLoading(false));
+  }
 
   function submit(event) {
     event.preventDefault();
@@ -574,6 +894,21 @@ function ChatPane({ onUiAction }) {
     ]),
     h("form", { className: "chat-input-area chat-input-form", onSubmit: submit }, [
       h("input", {
+        type: "file",
+        ref: fileInputRef,
+        onChange: handleFileChange,
+        accept: ".xlsx,.xls,.csv",
+        style: { display: "none" },
+        id: "excel-upload-input",
+      }),
+      h("button", {
+        type: "button",
+        onClick: triggerFileUpload,
+        disabled: isLoading,
+        "aria-label": "Upload Excel or CSV file",
+        className: "upload-btn",
+      }, h(Icon, { name: "paperclip", size: 18 })),
+      h("input", {
         value: input,
         onChange: (event) => setInput(event.target.value),
         placeholder: "Ask about CTC, probability, benchmarks...",
@@ -588,6 +923,8 @@ function RightCanvas({ summary, options, candidates, activeTab, setActiveTab }) 
   const renderTab = () => {
     if (activeTab === "dashboard") return h(Dashboard, { summary, candidates, onNavigate: setActiveTab });
     if (activeTab === "simulator") return h(OfferSimulator, { options });
+    if (activeTab === "negotiation") return h(NegotiationSimulator, { options });
+    if (activeTab === "risk") return h(RiskRadar, null);
     if (activeTab === "table") return h(RecentOffersTable, { candidates });
     return h(Dashboard, { summary, candidates, onNavigate: setActiveTab });
   };
@@ -596,6 +933,8 @@ function RightCanvas({ summary, options, candidates, activeTab, setActiveTab }) 
     h("div", { className: "tabs-header" }, [
       h("button", { className: `tab-btn ${activeTab === "dashboard" ? "active" : ""}`, onClick: () => setActiveTab("dashboard") }, [h(Icon, { name: "layout-dashboard", size: 16 }), "Dashboard"]),
       h("button", { className: `tab-btn ${activeTab === "simulator" ? "active" : ""}`, onClick: () => setActiveTab("simulator") }, [h(Icon, { name: "calculator", size: 16 }), "Simulator"]),
+      h("button", { className: `tab-btn ${activeTab === "negotiation" ? "active" : ""}`, onClick: () => setActiveTab("negotiation") }, [h(Icon, { name: "handshake", size: 16 }), "Negotiation Twin"]),
+      h("button", { className: `tab-btn ${activeTab === "risk" ? "active" : ""}`, onClick: () => setActiveTab("risk") }, [h(Icon, { name: "radar", size: 16 }), "Risk Radar"]),
       h("button", { className: `tab-btn ${activeTab === "table" ? "active" : ""}`, onClick: () => setActiveTab("table") }, [h(Icon, { name: "table", size: 16 }), "Recent Offers"]),
     ]),
     h("div", { className: "canvas-content" }, renderTab()),
@@ -629,6 +968,14 @@ function App() {
   function handleUiAction(action) {
     if (action.type === "FILTER_UI" && action.tab) {
       setActiveTab(action.tab);
+    } else if (action.type === "DATA_UPDATED") {
+      Promise.all([api.summary(), api.options(), api.candidates()])
+        .then(([summaryData, optionsData, candidateData]) => {
+          setSummary(summaryData);
+          setOptions(optionsData);
+          setCandidates(candidateData);
+        })
+        .catch((err) => setError(String(err)));
     }
   }
 

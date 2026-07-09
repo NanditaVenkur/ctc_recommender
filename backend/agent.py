@@ -25,7 +25,7 @@ Useful behavior:
 - Use simulator when asked about a candidate profile, acceptance probability, P20/P50/P80, or whether a given offer is competitive.
 - Use optimize_offer when asked what CTC is needed for a target acceptance probability.
 - Use kpis when asked about overall offer funnel, acceptance rate, or dashboard-level metrics.
-- Use filter_ui when asked to open or show dashboard, simulator, or recent offers.
+- Use filter_ui when asked to open or show dashboard, simulator, negotiation twin, risk radar, or recent offers.
 
 Keep responses concise, practical, and recruiter-friendly.
 """
@@ -108,6 +108,10 @@ def _local_ui_action(messages: list[dict]) -> tuple[str, list[dict]] | None:
         tab = "dashboard"
     elif any(phrase in text for phrase in ["open recent", "open the recent", "show recent", "show the recent", "recent offers", "offers table"]):
         tab = "table"
+    elif any(phrase in text for phrase in ["negotiat", "open negotiation", "negotiation twin"]):
+        tab = "negotiation"
+    elif any(phrase in text for phrase in ["risk radar", "at-risk offers", "at risk offers", "open risk", "show risk"]):
+        tab = "risk"
 
     if tab is None:
         return None
@@ -270,7 +274,7 @@ def chat_with_agent(messages: list[dict], state: dict) -> tuple[str, list[dict]]
 
     @tool
     def filter_ui(tab: str, filter_column: str | None = None, filter_value: str | None = None) -> str:
-        """Switch UI tab. tab must be dashboard, simulator, or table."""
+        """Switch UI tab. tab must be dashboard, simulator, negotiation, risk, or table."""
         action = {
             "type": "FILTER_UI",
             "tab": tab,
