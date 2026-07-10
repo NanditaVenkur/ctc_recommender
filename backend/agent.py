@@ -38,25 +38,129 @@ Keep responses concise, practical, and recruiter-friendly.
 """
 
 
+class _DirectRadeonChat:
+    def __init__(self, *, base_url: str, api_key: str, model: str):
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.model = model
+
+    def invoke(self, messages):
+        import requests
+        from langchain_core.messages import AIMessage
+
+        payload_messages = []
+        for message in messages:
+            role = getattr(message, "type", None) or getattr(message, "role", None)
+            content = getattr(message, "content", "")
+            if role == "human":
+                role = "user"
+            elif role == "ai":
+                role = "assistant"
+            elif role not in {"system", "user", "assistant"}:
+                role = "user"
+            payload_messages.append({"role": role, "content": str(content)})
+
+        payload = {
+            "model": self.model,
+            "messages": payload_messages,
+            "temperature": float(os.environ.get("RADEON_TEMPERATURE", "0.1")),
+            "max_tokens": int(os.environ.get("RADEON_MAX_TOKENS", "512")),
+        }
+        headers = {}
+        if self.api_key and self.api_key != "not-needed":
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        attempts = int(os.environ.get("RADEON_RETRIES", "6"))
+        last_response = None
+        for attempt in range(attempts):
+            response = requests.post(
+                f"{self.base_url}/chat/completions",
+                json=payload,
+                headers=headers,
+                timeout=float(os.environ.get("RADEON_TIMEOUT_SECONDS", "60")),
+            )
+            last_response = response
+            if response.status_code != 403:
+                break
+            if attempt + 1 < attempts:
+                import time
+                time.sleep(float(os.environ.get("RADEON_RETRY_SLEEP_SECONDS", "1")))
+
+        last_response.raise_for_status()
+        data = last_response.json()
+        return AIMessage(content=data["choices"][0]["message"].get("content", ""))
+
+def _get_openai_compatible_llm(*, provider_name: str, base_url: str, api_key: str, model: str):
+    from langchain_openai import ChatOpenAI
+
+    return ChatOpenAI(
+        model=model,
+        base_url=base_url,
+        api_key=api_key,
+        temperature=0.1,
+    ), None
+
+
+def _get_groq_llm():
+    key = os.environ.get("GROQ_API_KEY")
+    model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+
+    if not key:
+        return None, "GROQ_API_KEY is not configured in backend/.env"
+
+    return _get_openai_compatible_llm(
+        provider_name="groq",
+        base_url="https://api.groq.com/openai/v1",
+        api_key=key,
+        model=model,
+    )
+
+
+def _get_radeon_llm():
+    base_url = (
+        os.environ.get("RADEON_BASE_URL")
+        or os.environ.get("AMD_BASE_URL")
+        or os.environ.get("OPENAI_BASE_URL")
+    )
+    key = (
+        os.environ.get("RADEON_API_KEY")
+        or os.environ.get("AMD_API_KEY")
+        or os.environ.get("OPENAI_API_KEY")
+        or "not-needed"
+    )
+    model = os.environ.get("RADEON_MODEL") or os.environ.get("AMD_MODEL")
+
+    if not base_url:
+        return None, "RADEON_BASE_URL is not configured in backend/.env"
+    if not model:
+        return None, "RADEON_MODEL is not configured in backend/.env"
+
+    return _DirectRadeonChat(
+        base_url=base_url,
+        api_key=key,
+        model=model,
+    ), None
+
+
 def get_llm():
+    provider = os.environ.get("LLM_PROVIDER", "groq").strip().lower()
+    provider_aliases = {
+        "groq": "groq",
+        "radeon": "radeon",
+        "amd": "radeon",
+        "ryzen-ai": "radeon",
+        "ryzen_ai": "radeon",
+    }
+    provider = provider_aliases.get(provider, provider)
+
     try:
-        from langchain_openai import ChatOpenAI
-
-        key = os.environ.get("GROQ_API_KEY")
-        model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
-
-        if not key:
-            return None, "GROQ_API_KEY is not configured in backend/.env"
-
-        return ChatOpenAI(
-            model=model,
-            base_url="https://api.groq.com/openai/v1",
-            api_key=key,
-            temperature=0.1,
-        ), None
+        if provider == "groq":
+            return _get_groq_llm()
+        if provider == "radeon":
+            return _get_radeon_llm()
+        return None, f"Unsupported LLM_PROVIDER '{provider}'. Use 'groq' or 'radeon'."
     except Exception as exc:
-        return None, f"Groq LLM Error: {exc}"
-
+        return None, f"{provider.title()} LLM Error: {exc}"
 
 def _latest_offer_period(df) -> dict:
     latest_year = int(df["offer_year"].max())
@@ -205,6 +309,96 @@ def _lpa_amounts(text: str) -> list[float]:
     return [float(match) for match in matches]
 
 
+def _number_after(label_pattern: str, text: str) -> float | None:
+    match = re.search(label_pattern + r"\s*(?:ctc)?\s*(\d+(?:\.\d+)?)", text, flags=re.IGNORECASE)
+    return None if match is None else float(match.group(1))
+
+
+def _number_before(label_pattern: str, text: str) -> float | None:
+    match = re.search(r"(\d+(?:\.\d+)?)\s*" + label_pattern, text, flags=re.IGNORECASE)
+    return None if match is None else float(match.group(1))
+
+
+def _yes_no_from_text(text: str, label: str) -> int:
+    lowered = text.lower()
+    if any(pattern in lowered for pattern in [f"no {label}", f"without {label}", f"{label} no", f"{label}: no"]):
+        return 0
+    if any(pattern in lowered for pattern in [f"yes {label}", f"with {label}", f"{label} yes", f"{label}: yes"]):
+        return 1
+    return 0
+
+
+def _full_candidate_from_text(text: str, state: dict) -> dict | None:
+    df = state["df"]
+    current_ctc = _number_after(r"current\s+ctc", text)
+    expected_ctc = _number_after(r"expected\s+ctc", text)
+    offered_ctc = _number_after(r"offered\s+ctc", text)
+    if offered_ctc is None:
+        first_amount = _first_lpa_amount(text)
+        if first_amount is not None and any(word in text.lower() for word in ["enough", "acceptance", "probability"]):
+            offered_ctc = first_amount
+    experience = _number_after(r"(?:experience|exp)", text) or _number_before(r"(?:years?\s+experience|yrs?\s+experience|years?|yrs?)", text)
+    notice = _number_after(r"(?:notice|notice\s+period)", text) or _number_before(r"(?:days?\s+notice|days?\s+notice\s+period|days?)", text)
+
+    profile = _profile_from_text(text, df)
+    company_type = _known_value_from_text(text, df["previous_company_type"].dropna().unique())
+    source = _known_value_from_text(text, df["candidate_source"].dropna().unique())
+
+    required = [current_ctc, expected_ctc, offered_ctc, experience, notice, profile, company_type, source]
+    if any(value is None for value in required):
+        return None
+
+    return _candidate_payload(
+        state,
+        offered_ctc,
+        current_ctc,
+        expected_ctc,
+        experience,
+        notice,
+        profile["offered_band"],
+        source,
+        profile["lob"],
+        profile["primary_skill"],
+        company_type,
+        profile["location"],
+        _yes_no_from_text(text, "joining bonus"),
+        _yes_no_from_text(text, "relocation"),
+    )
+
+
+def _local_full_profile_answer(messages: list[dict], state: dict) -> tuple[str, list[dict]] | None:
+    if not messages:
+        return None
+    text = str(messages[-1].get("content", ""))
+    lowered = text.lower()
+    if not any(word in lowered for word in ["acceptance", "probability", "enough", "sufficient", "70%", "70 percent"]):
+        return None
+
+    candidate = _full_candidate_from_text(text, state)
+    if candidate is None:
+        return None
+
+    percentiles = flexible_percentiles(
+        state["df"],
+        candidate,
+        flexibility="balanced",
+        min_records=MIN_BENCHMARK_RECORDS,
+    )
+    adjusted = _benchmark_adjusted_offer(
+        state["model"],
+        candidate,
+        percentiles,
+        float(candidate["offered_ctc"]),
+        target_probability=0.70,
+    )
+    adjusted.update({
+        "offered_ctc": float(candidate["offered_ctc"]),
+        "target_probability": 0.70,
+        "benchmark_filters": percentiles.get("filters_used"),
+        "benchmark_rule": percentiles.get("similarity_rule"),
+    })
+    return _tool_output_fallback(json.dumps(adjusted)), []
+
 def _benchmark_text(percentiles: dict) -> str:
     return (
         f"P20 {_fmt_lpa(percentiles.get('p20_offered_ctc'))}, "
@@ -331,6 +525,8 @@ def _local_compensation_answer(messages: list[dict], state: dict) -> tuple[str, 
             "compare",
             "versus",
             " vs ",
+            "enough",
+            "sufficient",
             "too low",
             "too high",
             "too much",
@@ -430,6 +626,9 @@ def chat_with_agent(messages: list[dict], state: dict) -> tuple[str, list[dict]]
     if local_action is not None:
         return local_action
 
+    local_full_profile = _local_full_profile_answer(messages, state)
+    if local_full_profile is not None:
+        return local_full_profile
     local_compensation = _local_compensation_answer(messages, state)
     if local_compensation is not None:
         return local_compensation
@@ -602,7 +801,11 @@ def chat_with_agent(messages: list[dict], state: dict) -> tuple[str, list[dict]]
         return json.dumps({"status": "success", "ui_updated": True, "action": action})
 
     tools = [simulator, kpis, optimize_offer, filter_ui]
-    llm_with_tools = llm.bind_tools(tools)
+    active_provider = os.environ.get("LLM_PROVIDER", "groq").strip().lower()
+    if active_provider in {"radeon", "amd", "ryzen-ai", "ryzen_ai"}:
+        llm_with_tools = llm
+    else:
+        llm_with_tools = llm.bind_tools(tools)
 
     lc_messages = [SystemMessage(content=SYSTEM_INSTRUCTION)]
     for message in messages[-12:]:
@@ -720,6 +923,15 @@ def _tool_output_fallback(raw_output: str) -> str:
         )
 
     return json.dumps(data, indent=2)
+
+
+
+
+
+
+
+
+
 
 
 
