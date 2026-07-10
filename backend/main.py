@@ -28,7 +28,7 @@ from .risk_agent import scan_at_risk_offers
 
 FRONTEND_DIR = ROOT / "frontend"
 TARGET_PROBABILITY = 0.70
-MIN_BENCHMARK_RECORDS = 8
+MIN_BENCHMARK_RECORDS = 5
 
 
 class RecommendationStatus(str, Enum):
@@ -102,7 +102,7 @@ state: dict = {}
 
 @app.on_event("startup")
 def startup() -> None:
-    init_db()
+    init_db(force=True)
     df = read_offers()
     state["df"] = df
     state["model"] = train_acceptance_model(df)

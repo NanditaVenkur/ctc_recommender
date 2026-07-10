@@ -4,6 +4,9 @@ import numpy as np
 import pandas as pd
 
 
+MIN_SKILL_SPECIFIC_RECORDS = 3
+
+
 FALLBACK_LEVELS = {
     "strict": [
         ["primary_skill", "lob", "location", "offered_band"],
@@ -87,11 +90,34 @@ def flexible_percentiles(data: pd.DataFrame, candidate: dict, flexibility: str =
 
     attempts = []
     best = None
+    best_skill_specific = None
     for level in FALLBACK_LEVELS[flexibility]:
         filters = {field: exact[field] for field in level if exact.get(field) is not None}
         subset, applied = _filter(data, filters)
         summary = _summarize(subset, applied, min_records)
         attempts.append(summary)
+
+        if "primary_skill" in applied and summary["accepted_similar_records"] >= MIN_SKILL_SPECIFIC_RECORDS:
+            if (
+                best_skill_specific is None
+                or len(summary["filters_used"]) > len(best_skill_specific["filters_used"])
+                or summary["accepted_similar_records"] > best_skill_specific["accepted_similar_records"]
+            ):
+                best_skill_specific = summary
+
+        if (
+            "primary_skill" not in applied
+            and best_skill_specific is not None
+            and best_skill_specific["accepted_similar_records"] >= MIN_SKILL_SPECIFIC_RECORDS
+        ):
+            best_skill_specific = dict(best_skill_specific)
+            best_skill_specific["fallback_attempts"] = _serializable_attempts(attempts)
+            best_skill_specific["sample_confidence"] = "Low"
+            best_skill_specific["specificity"] = _specificity_label(best_skill_specific["filters_used"])
+            best_skill_specific["confidence"] = _overall_confidence(
+                best_skill_specific["specificity"], best_skill_specific["sample_confidence"]
+            )
+            return best_skill_specific
 
         if summary["accepted_similar_records"] >= min_records:
             summary = dict(summary)

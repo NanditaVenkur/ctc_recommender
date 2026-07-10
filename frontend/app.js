@@ -1,4 +1,4 @@
-const { createElement: h, useEffect, useMemo, useRef, useState } = React;
+﻿const { createElement: h, useEffect, useMemo, useRef, useState } = React;
 
 const api = {
   summary: () => fetch("/api/summary").then((res) => res.json()),
@@ -170,6 +170,45 @@ function ProbabilityChart({ data, currentOffer, suggestedOffer }) {
   ]);
 }
 
+function CtcFrequencyChart({ records }) {
+  const values = (records || [])
+    .map((row) => Number(row.offered_ctc))
+    .filter((value) => Number.isFinite(value));
+
+  if (!values.length) {
+    return h("div", { className: "empty" }, "No accepted/joined CTC records available for this benchmark.");
+  }
+
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const binCount = Math.min(8, Math.max(3, Math.ceil(Math.sqrt(values.length))));
+  const binWidth = Math.max((max - min) / binCount, 1);
+  const bins = Array.from({ length: binCount }, (_, index) => {
+    const start = min + index * binWidth;
+    const end = index === binCount - 1 ? max : start + binWidth;
+    return { start, end, count: 0 };
+  });
+
+  values.forEach((value) => {
+    const index = Math.min(binCount - 1, Math.floor((value - min) / binWidth));
+    bins[index].count += 1;
+  });
+
+  const maxCount = Math.max(...bins.map((bin) => bin.count), 1);
+  return h("div", { className: "histogram" }, bins.map((bin) =>
+    h("div", { className: "histogram-bin", key: `${bin.start}-${bin.end}` }, [
+      h("div", { className: "histogram-bar-wrap" }, [
+        h("div", {
+          className: "histogram-bar",
+          style: { height: `${Math.max(8, (bin.count / maxCount) * 100)}%` },
+          title: `${bin.count} accepted/joined profiles`,
+        }),
+      ]),
+      h("strong", null, bin.count),
+      h("span", null, `${bin.start.toFixed(1)}-${bin.end.toFixed(1)} LPA`),
+    ])
+  ));
+}
 function Dashboard({ summary, candidates, onNavigate }) {
   const kpis = summary.kpis;
   const maxStatus = Math.max(...Object.values(summary.status_counts));
@@ -479,6 +518,11 @@ function ResultPanel({ result }) {
       suggestedOffer: result.suggested_ctc,
     }),
     h("div", { className: "panel-title", style: { marginTop: 16 } }, [
+      h("h3", null, "Accepted Profile Frequency by CTC"),
+      h("span", null, "Count of accepted/joined benchmark profiles in each offered CTC range"),
+    ]),
+    h(CtcFrequencyChart, { records: benchmarkRecords }),
+    h("div", { className: "panel-title", style: { marginTop: 16 } }, [
       h("h3", null, "Benchmark Transparency"),
       h("span", null, "Why this recommendation has this confidence"),
     ]),
@@ -640,7 +684,13 @@ function NegotiationSimulator({ options }) {
 
 function NegotiationResult({ result }) {
   const statusTone = result.status === "agreed" ? "good" : result.status === "impasse" ? "bad" : "warn";
-  const statusLabel = { agreed: "Agreement reached", impasse: "Impasse", max_rounds_reached: "No agreement within round limit" }[result.status] || result.status;
+  const statusLabel = {
+    agreed: "Agreement reached",
+    agreement_with_risk: "Agreement reached with risk",
+    impasse: "Impasse",
+    max_rounds_reached: "No agreement within round limit",
+  }[result.status] || result.status;
+  const statusClass = statusTone === "good" ? "good" : "warn";
   const chartData = (result.rounds || []).map((r) => ({ round: r.round, acceptance_probability: r.acceptance_probability }));
 
   return h("div", { className: "panel" }, [
@@ -648,7 +698,7 @@ function NegotiationResult({ result }) {
       h("h3", null, "Negotiation Outcome"),
       h("span", null, `${result.rounds.length} round(s)`),
     ]),
-    h("div", { className: `notice ${statusTone === "good" ? "good" : "warn"}` }, `${statusLabel}. ${result.summary}`),
+    h("div", { className: `notice ${statusClass}` }, `${statusLabel}. ${result.summary}`),
     h("div", { className: "decision-grid" }, [
       h("div", { className: "decision-card current" }, [
         h("span", null, "Final offer"),
@@ -667,6 +717,12 @@ function NegotiationResult({ result }) {
         ]),
       ]),
     ]),
+    h("div", { className: "result-band compact-band" }, [
+      h("div", { className: "result-stat" }, [h("span", null, "Final candidate ask"), h("strong", null, fmtLpa(result.final_candidate_ask)), h("em", null, result.commercial_agreement ? "Commercial gap closed" : "Candidate still above offer")]),
+      h("div", { className: "result-stat" }, [h("span", null, "Model target offer"), h("strong", null, fmtLpa(result.minimum_offer_for_target)), h("em", null, "Lowest searched offer that reaches target probability")]),
+      h("div", { className: "result-stat" }, [h("span", null, "Package levers"), h("strong", null, (result.active_levers || []).length ? (result.active_levers || []).length : "-"), h("em", null, (result.active_levers || []).join(", ") || "No extra levers added")]),
+    ]),
+    result.next_action && h("div", { className: "warning" }, result.next_action),
     h("div", { className: "panel-title", style: { marginTop: 16 } }, [
       h("h3", null, "Negotiation Transcript"),
       h("span", null, "Recruiter Agent vs. Candidate Agent"),
@@ -675,9 +731,11 @@ function NegotiationResult({ result }) {
       h("div", { className: "negotiation-turn recruiter", key: `${r.round}-r` }, [
         h("span", { className: "negotiation-round-tag" }, `Round ${r.round}`),
         h("p", null, r.recruiter_message),
+        r.recruiter_reason && h("p", { className: "negotiation-reason" }, `Why: ${r.recruiter_reason}`),
       ]),
       h("div", { className: "negotiation-turn candidate", key: `${r.round}-c` }, [
         h("p", null, r.candidate_message),
+        r.candidate_reason && h("p", { className: "negotiation-reason" }, `Why: ${r.candidate_reason}`),
       ]),
     ])),
     h("div", { className: "panel-title", style: { marginTop: 16 } }, [
@@ -689,20 +747,22 @@ function NegotiationResult({ result }) {
     ]),
     h("div", { className: "table-wrap" }, [
       h("table", null, [
-        h("thead", null, h("tr", null, ["Round", "Recruiter offer", "Candidate ask", "Acceptance probability"].map((head) => h("th", { key: head }, head)))),
+        h("thead", null, h("tr", null, ["Round", "Recruiter offer", "Candidate ask", "Acceptance probability", "Commercial", "Target met"].map((head) => h("th", { key: head }, head)))),
         h("tbody", null, (result.rounds || []).map((r) =>
           h("tr", { key: r.round }, [
             h("td", null, r.round),
             h("td", null, fmtLpa(r.recruiter_offer)),
             h("td", null, fmtLpa(r.candidate_ask)),
             h("td", null, fmtPct(r.acceptance_probability)),
+            h("td", null, r.commercial_agreement ? "Yes" : "No"),
+            h("td", null, r.target_probability_met ? "Yes" : "No"),
           ])
         )),
       ]),
     ]),
+    (result.method_notes || []).length ? h("div", { className: "explain", style: { marginTop: 12 } }, (result.method_notes || []).map((note, index) => h("p", { key: index }, note))) : null,
   ]);
 }
-
 function RiskRadar() {
   const [scan, setScan] = useState(null);
   const [error, setError] = useState(null);
@@ -995,3 +1055,10 @@ function App() {
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(h(App));
+
+
+
+
+
+
+

@@ -1,4 +1,4 @@
-:root {
+﻿:root {
   --bg: #111113;
   --bg-raised: #1a1a1f;
   --panel: #222228;
@@ -811,6 +811,54 @@ th {
   font-size: 16px;
 }
 
+.histogram {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 10px;
+  min-height: 190px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-raised);
+}
+
+.histogram-bin {
+  display: grid;
+  grid-template-rows: 1fr auto auto;
+  gap: 6px;
+  min-width: 0;
+  text-align: center;
+}
+
+.histogram-bar-wrap {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  height: 116px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.histogram-bar {
+  width: 100%;
+  min-width: 20px;
+  max-width: 54px;
+  background: linear-gradient(180deg, var(--accent), #d97706);
+  border-radius: 6px 6px 0 0;
+}
+
+.histogram-bin strong {
+  color: var(--ink);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.histogram-bin span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
 .row-joined td {
   background: rgba(16, 185, 129, 0.06);
 }
@@ -883,6 +931,13 @@ th {
   border-bottom-right-radius: 4px;
 }
 
+.negotiation-reason {
+  margin-top: 6px !important;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+  font-size: 12px;
+}
 .negotiation-round-tag {
   display: block;
   margin-bottom: 4px;
@@ -951,3 +1006,5 @@ th {
     grid-template-columns: 1fr;
   }
 }
+
+

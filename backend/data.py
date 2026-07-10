@@ -37,6 +37,7 @@ COLUMN_MAP = {
     "Primary Skill": "primary_skill",
     "Previous Company Type": "previous_company_type",
     "Location": "location",
+    "Branch": "location",
     "Age": "age",
     "Status": "status",
 }
