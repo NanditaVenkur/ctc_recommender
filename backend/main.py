@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from enum import Enum
 
@@ -34,6 +34,7 @@ MIN_BENCHMARK_RECORDS = 5
 class RecommendationStatus(str, Enum):
     OK = "ok"
     REVIEW_LOW_SUPPORT = "review_low_support"
+    REVIEW_BELOW_BENCHMARK = "review_below_benchmark"
     ESCALATE_LOW_PROB = "escalate_low_probability"
     ESCALATE_ABOVE_MARKET = "escalate_above_market"
     NO_TARGET_IN_RANGE = "no_target_in_range"
@@ -284,12 +285,14 @@ def recommend(payload: CandidateRequest) -> dict:
             target_offer_ctc = point["offered_ctc"]
             break
 
+    benchmark_p20 = percentiles.get("p20_offered_ctc")
     benchmark_p80 = percentiles.get("p80_offered_ctc")
     benchmark_p50 = percentiles.get("p50_offered_ctc")
     suggested, rec_status = _choose_suggested_ctc(
         offered_ctc=candidate["offered_ctc"],
         probability_at_offer=probability,
         target_offer_ctc=target_offer_ctc,
+        benchmark_p20=benchmark_p20,
         benchmark_p50=benchmark_p50,
         benchmark_p80=benchmark_p80,
     )
@@ -321,6 +324,7 @@ def recommend(payload: CandidateRequest) -> dict:
             percentiles=percentiles,
             recommendation_status=rec_status,
             target_offer_ctc=target_offer_ctc,
+            benchmark_p20=benchmark_p20,
             benchmark_p80=benchmark_p80,
             profile_match=profile_match,
             offered_ctc=candidate["offered_ctc"],
@@ -447,6 +451,7 @@ def _choose_suggested_ctc(
     offered_ctc: float,
     probability_at_offer: float,
     target_offer_ctc: float | None,
+    benchmark_p20: float | None,
     benchmark_p50: float | None,
     benchmark_p80: float | None,
     min_probability_ok: float = 0.5,
@@ -466,6 +471,8 @@ def _choose_suggested_ctc(
         return None, RecommendationStatus.ESCALATE_LOW_PROB
 
     suggested = max(offered_ctc, min(target_offer_ctc, benchmark_p80 or target_offer_ctc))
+    if benchmark_p20 is not None and suggested < benchmark_p20 * 0.9:
+        return float(benchmark_p20), RecommendationStatus.REVIEW_BELOW_BENCHMARK
     return suggested, RecommendationStatus.OK
 
 
@@ -473,6 +480,7 @@ def _recommendation_status_message(status: RecommendationStatus) -> str:
     messages = {
         RecommendationStatus.OK: "Confident recommendation available",
         RecommendationStatus.REVIEW_LOW_SUPPORT: "Review carefully: recommendation is directional because this skill + LOB combination has weak or no history",
+        RecommendationStatus.REVIEW_BELOW_BENCHMARK: "Review carefully: the model target is below the successful benchmark floor for this band/profile",
         RecommendationStatus.ESCALATE_LOW_PROB: "Escalate: offer is high versus benchmark, but acceptance probability is still low",
         RecommendationStatus.ESCALATE_ABOVE_MARKET: "Escalate: reaching the target probability would exceed the benchmark range",
         RecommendationStatus.NO_TARGET_IN_RANGE: "No confident CTC suggestion: target probability is not reached in the searched range",
@@ -546,6 +554,7 @@ def _recommendation_warnings(
     percentiles: dict,
     recommendation_status: RecommendationStatus,
     target_offer_ctc: float | None,
+    benchmark_p20: float | None,
     benchmark_p80: float | None,
     profile_match: dict,
     offered_ctc: float,
@@ -561,6 +570,12 @@ def _recommendation_warnings(
         warnings.append(conflict)
     if recommendation_status != RecommendationStatus.OK:
         warnings.append(_recommendation_status_message(recommendation_status))
+    if recommendation_status == RecommendationStatus.REVIEW_BELOW_BENCHMARK and benchmark_p20 is not None:
+        warnings.append(
+            f"The acceptance model reaches the target near {target_offer_ctc:.2f} LPA, "
+            f"but accepted/joined offers for this benchmark start around P20 {benchmark_p20:.2f} LPA. "
+            "Suggested CTC was raised to the benchmark floor; verify band fit and internal parity."
+        )
     if percentiles.get("specificity") == "Broad benchmark":
         warnings.append("The CTC range is based on a broad benchmark, not a close profile match.")
 
@@ -615,3 +630,5 @@ def _reconcile_signals(probability_at_offer: float, offered_ctc: float, benchmar
             "Raising CTC alone may not fix this; investigate candidate-specific factors."
         )
     return None
+
+
