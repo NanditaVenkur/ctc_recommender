@@ -95,3 +95,82 @@ CSV/Excel through the Desk Copilot to retrain the model without restarting.
 FastAPI + pandas + scikit-learn backend · React 18 (no build step) frontend ·
 hand-rolled SVG charts (validated colorblind-safe palette) · LLM-backed copilot
 and negotiation agents.
+## AMD Notebook Proxy LLM Setup
+
+This is the theoretical AMD GPU deployment flow we would use when running the LLM inside an AMD-hosted Jupyter pod.
+
+```text
+Laptop (React + FastAPI + PostgreSQL)
+    -> HTTPS
+https://notebooks.amd.com/<pod-name>/proxy/<port>/
+    -> jupyter-server-proxy
+localhost:<port> inside Jupyter pod (vLLM/SGLang on MI300X GPU)
+```
+
+### Step 1: Start an LLM Server Inside the Jupyter Pod
+
+Open a terminal in JupyterLab and run:
+
+```bash
+vllm serve Qwen/Qwen2.5-7B-Instruct \
+  --port 8000 \
+  --host 0.0.0.0 \
+  --max-model-len 4096
+```
+
+### Step 2: Test From Inside the Pod
+
+In another terminal or notebook cell:
+
+```bash
+curl http://localhost:8000/v1/models
+```
+
+If this returns the model list, the GPU inference server is running.
+
+### Step 3: Access From Outside Using Jupyter Server Proxy
+
+The external URL pattern is:
+
+```text
+https://notebooks.amd.com/<pod-name>/proxy/8000/v1/chat/completions?token=<jupyter-token>
+```
+
+The `<pod-name>` and `<token>` are available in the JupyterLab browser URL, for example:
+
+```text
+https://notebooks.amd.com/jupyter-hack-team-XXXX-260611.../lab?token=abc123
+```
+
+The proxy link can also work by removing `/lab` from the JupyterLab URL and using the base notebook URL.
+
+### Step 4: Call From the Local FastAPI Backend
+
+```python
+import requests
+
+JUPYTER_BASE = "https://notebooks.amd.com/jupyter-hack-team-XXXX-260611XXXXXX-XXXXXXXX"
+TOKEN = "abc123"
+
+response = requests.post(
+    f"{JUPYTER_BASE}/proxy/8000/v1/chat/completions",
+    params={"token": TOKEN},
+    json={
+        "model": "Qwen/Qwen2.5-7B-Instruct",
+        "messages": [{"role": "user", "content": "Hello!"}],
+        "max_tokens": 256,
+    },
+)
+
+print(response.json())
+```
+
+### Notes and Considerations
+
+- `jupyter-server-proxy` is expected to already be installed in the AMD pod.
+- Any server port started inside the pod, such as `8000` or `8080`, can be accessed through `/proxy/<port>/`.
+- The Jupyter token is required for authentication. Without it, requests may return `403`.
+- The React frontend can call the same HTTPS proxy URL.
+- The trailing slash can matter: use `/proxy/8000/` rather than `/proxy/8000`.
+- If a corporate proxy blocks WebSockets, standard HTTP REST calls to `/v1/chat/completions` should still work because the OpenAI-compatible API does not require WebSockets.
+- This setup may depend on network and IT restrictions, so local validation with `curl` should be done first.
