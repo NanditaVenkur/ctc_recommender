@@ -20,6 +20,7 @@ from .data import (
     clean_and_prepare_uploaded_data,
     update_db_with_df,
 )
+from .enrichment import forge_offer_letter, github_scan, market_wire
 from .model import acceptance_curve, category_support, predict_acceptance, train_acceptance_model
 from .negotiation import run_negotiation
 from .recommender import flexible_percentiles
@@ -48,10 +49,16 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: list[ChatMessage]
+    context: dict | None = None
 
 
 class BenchmarkRequest(BaseModel):
     filters: dict
+
+
+class OfferLetterRequest(BaseModel):
+    candidate: dict
+    quote: dict
 
 
 class CandidateRequest(BaseModel):
@@ -429,8 +436,26 @@ def chat(payload: ChatRequest) -> dict:
     if not messages:
         raise HTTPException(status_code=400, detail="No messages provided")
 
-    response_text, ui_actions = chat_with_agent(messages, state)
-    return {"response": response_text, "ui_actions": ui_actions}
+    response_text, ui_actions, cards = chat_with_agent(messages, state, payload.context)
+    return {"response": response_text, "ui_actions": ui_actions, "cards": cards}
+
+
+@app.get("/api/github-scan")
+def github_scan_endpoint(username: str, skill: str = "") -> dict:
+    return github_scan(username, skill)
+
+
+@app.get("/api/market-wire")
+def market_wire_endpoint(lpa: float | None = None, skill: str = "", location: str = "") -> dict:
+    return market_wire(lpa=lpa, skill=skill, location=location)
+
+
+@app.post("/api/offer-letter")
+def offer_letter(payload: OfferLetterRequest) -> dict:
+    result = forge_offer_letter(payload.candidate, payload.quote)
+    if not result.get("success"):
+        raise HTTPException(status_code=502, detail=result.get("reason", "Unable to draft the offer letter"))
+    return result
 
 
 @app.post("/api/benchmark-records")

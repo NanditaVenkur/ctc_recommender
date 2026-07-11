@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import os
@@ -29,10 +29,20 @@ Critical compensation logic:
 - For band-sensitive questions, emphasize whether the offer is below P20, between P20-P50, between P50-P80, or above P80.
 
 Useful behavior:
-- Use simulator when asked about a candidate profile, acceptance probability, P20/P50/P80, or whether a given offer is competitive.
+- Use prefill_simulator when the user asks you to price, quote, evaluate, or run a specific candidate (e.g. "price a 6-year Python dev in Pune at 18 LPA") — it fills the Offer Studio form on screen and runs the full visible analysis. After it succeeds, reply briefly that the candidate is loaded and the full quote is on screen, and summarize the key inputs you used.
+- Use simulator only for quick inline what-if probability questions where the user does not need the on-screen analysis.
 - Use optimize_offer when asked what CTC is needed for a target acceptance probability.
 - Use kpis when asked about overall offer funnel, acceptance rate, or dashboard-level metrics.
+- Use desk_brief when asked for a brief, briefing, morning summary, or "how is the desk doing" — then compose a crisp 4-6 sentence briefing from its data: trend direction, strongest and weakest skill segment, at-risk offers, and one recommended action.
 - Use filter_ui when asked to open or show dashboard, simulator, negotiation twin, risk radar, or recent offers.
+- Use web_search when asked about external market salaries, industry average salaries, or general compensation data outside our local database. You can also use it when our local data support is low to cross-reference our statistics with the broader industry.
+
+Live desk context: a system message may describe what the user is currently viewing and their last quote or negotiation. Use it to resolve follow-up questions like "why was this escalated?" or "what if I add a joining bonus?" without asking the user to repeat the candidate profile.
+
+Conversation behavior:
+- If the user greets you or asks what you can do, answer conversationally WITHOUT calling any tool. Briefly list your capabilities: benchmark lookups, acceptance-probability simulations, offer optimization for a target probability, opening desk views (Pulse, Offer Studio, Arena, Risk Radar, Ledger), external market salary checks, and retraining on an uploaded CSV/Excel dataset (via the paperclip button).
+- After a tool returns, always answer in plain recruiter-friendly prose. Never paste raw JSON, tool output, or internal action payloads into the reply.
+- When search results come from the internal-database fallback (source local_database_fallback), say clearly that live web search was unavailable and the numbers are internal benchmarks - do not present them as external sources.
 
 Keep responses concise, practical, and recruiter-friendly.
 """
@@ -373,6 +383,9 @@ def _local_full_profile_answer(messages: list[dict], state: dict) -> tuple[str, 
     lowered = text.lower()
     if not any(word in lowered for word in ["acceptance", "probability", "enough", "sufficient", "70%", "70 percent"]):
         return None
+    # Operational commands go to the LLM so it can drive the Offer Studio on screen.
+    if any(word in lowered for word in ["open", "fill", "load", "run", "studio", "screen", "for me"]):
+        return None
 
     candidate = _full_candidate_from_text(text, state)
     if candidate is None:
@@ -596,6 +609,178 @@ def _local_compensation_answer(messages: list[dict], state: dict) -> tuple[str, 
         [],
     )
 
+def _run_web_search(query: str, state: dict) -> str:
+    import requests
+    import re
+    import urllib.parse
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(query)}"
+    try:
+        response = requests.get(url, headers=headers, timeout=5)
+        if response.status_code == 200:
+            html = response.text
+            links = re.findall(r'<a class="result__a" href="([^"]+)"[^>]*>(.*?)</a>', html)
+            snippets = re.findall(r'<a class="result__snippet"[^>]*>(.*?)</a>', html)
+            results = []
+            for idx, (href, title) in enumerate(links[:4]):
+                title_clean = re.sub(r'<[^>]+>', '', title)
+                if "/l/?kh=" in href:
+                    parsed_url = urllib.parse.urlparse(href)
+                    query_params = urllib.parse.parse_qs(parsed_url.query)
+                    if 'uddg' in query_params:
+                        href = query_params['uddg'][0]
+                snippet_clean = ""
+                if idx < len(snippets):
+                    snippet_clean = re.sub(r'<[^>]+>', '', snippets[idx]).strip()
+                results.append({
+                    "title": title_clean,
+                    "url": href,
+                    "snippet": snippet_clean
+                })
+            if results:
+                return json.dumps({
+                    "query": query,
+                    "source": "web_search",
+                    "results": results
+                })
+    except Exception:
+        pass
+
+    df = state["df"]
+    skill = _known_value_from_text(query, df["primary_skill"].dropna().unique())
+    lob = _known_value_from_text(query, df["lob"].dropna().unique())
+    location = _known_value_from_text(query, df["location"].dropna().unique())
+    band = _known_value_from_text(query, df["offered_band"].dropna().unique())
+
+    filters = {
+        "primary_skill": skill,
+        "lob": lob,
+        "location": location,
+        "city_tier": city_tier(location) if location else None,
+        "offered_band": band,
+    }
+
+    percentiles = flexible_percentiles(df, filters, flexibility="balanced", min_records=5)
+    p20 = percentiles.get("p20_offered_ctc")
+    p50 = percentiles.get("p50_offered_ctc")
+    p80 = percentiles.get("p80_offered_ctc")
+    record_count = percentiles.get("accepted_similar_records", 0)
+
+    results = []
+    if record_count > 0:
+        local_desc = f"Based on {record_count} historical accepted/joined offers for similar roles in our database: P20 = {p20:.2f} LPA, P50 = {p50:.2f} LPA (median), P80 = {p80:.2f} LPA."
+        if percentiles.get("specificity") == "Broad benchmark":
+            local_desc += " Note: This is based on a broad fallback benchmark due to limited exact matching data."
+        results.append({
+            "title": f"Internal Database Salary Benchmark: {query}",
+            "url": "local_database_stats",
+            "snippet": local_desc
+        })
+
+    base_salary = p50 if p50 is not None else 12.5
+    min_salary = p20 if p20 is not None else base_salary * 0.6
+    max_salary = p80 if p80 is not None else base_salary * 1.6
+
+    skill_lbl = skill or "Software Developer"
+    loc_lbl = location or "India"
+    results.append({
+        "title": f"Estimated market range: {skill_lbl} in {loc_lbl}",
+        "url": "internal_estimate",
+        "snippet": (
+            f"Estimated range for a {skill_lbl} in {loc_lbl}: {min_salary:.2f}-{max_salary:.2f} LPA "
+            f"(midpoint {base_salary:.2f} LPA). This estimate is derived from our internal accepted-offer "
+            f"benchmarks because live web search is unavailable right now - it is not an external source."
+        ),
+    })
+
+    return json.dumps({
+        "query": query,
+        "source": "local_database_fallback",
+        "note": "Live web search was unreachable; results are internal-database benchmarks, not external listings.",
+        "results": results
+    })
+
+
+def _desk_brief_stats(state: dict) -> dict:
+    """Grounded numbers for a desk briefing: trend, skill extremes, and live risk scan."""
+    from .risk_agent import scan_at_risk_offers
+
+    df = state["df"]
+    total = len(df)
+    accepted = int(df["accepted"].sum())
+
+    monthly = (
+        df.groupby(["offer_year", "offer_month"], dropna=False)["accepted"]
+        .mean()
+        .reset_index()
+        .sort_values(["offer_year", "offer_month"])
+    )
+    rates = monthly["accepted"].tolist()
+    trend_direction = "flat"
+    recent_rate = None
+    if len(rates) >= 6:
+        recent = sum(rates[-3:]) / 3
+        previous = sum(rates[-6:-3]) / 3
+        recent_rate = round(recent, 3)
+        if recent - previous > 0.02:
+            trend_direction = "improving"
+        elif previous - recent > 0.02:
+            trend_direction = "declining"
+
+    by_skill = (
+        df.groupby("primary_skill")["accepted"]
+        .agg(["count", "mean"])
+        .reset_index()
+    )
+    by_skill = by_skill[by_skill["count"] >= 30].sort_values("mean")
+    worst_skill = best_skill = None
+    if len(by_skill) >= 2:
+        worst = by_skill.iloc[0]
+        best = by_skill.iloc[-1]
+        worst_skill = {"skill": str(worst["primary_skill"]), "acceptance_rate": round(float(worst["mean"]), 3), "offers": int(worst["count"])}
+        best_skill = {"skill": str(best["primary_skill"]), "acceptance_rate": round(float(best["mean"]), 3), "offers": int(best["count"])}
+
+    try:
+        risk = scan_at_risk_offers(df, state["model"], queue_size=40, risk_threshold=0.55, top_n=5)
+        at_risk_flagged = int(risk.get("flagged_count", 0))
+        top_risk = [
+            {"ref": row.get("candidate_ref"), "skill": row.get("primary_skill"), "p_accept": row.get("acceptance_probability")}
+            for row in (risk.get("flagged_offers") or [])[:3]
+        ]
+    except Exception:
+        at_risk_flagged = 0
+        top_risk = []
+
+    return {
+        "total_offers": total,
+        "overall_acceptance_rate": round(accepted / total, 3) if total else None,
+        "recent_3mo_acceptance_rate": recent_rate,
+        "trend_direction": trend_direction,
+        "best_skill": best_skill,
+        "worst_skill": worst_skill,
+        "at_risk_flagged": at_risk_flagged,
+        "top_at_risk": top_risk,
+        "instruction": "Compose a crisp 4-6 sentence desk briefing from these numbers, ending with one recommended action.",
+    }
+
+
+def _local_search_answer(messages: list[dict], state: dict) -> tuple[str, list[dict]] | None:
+    if not messages:
+        return None
+    text = str(messages[-1].get("content", ""))
+    lowered = text.lower()
+    
+    search_keywords = ["external", "market", "glassdoor", "indeed", "web", "search", "google", "outside", "industry average", "industry standard", "salary portal"]
+    if not any(word in lowered for word in search_keywords):
+        return None
+        
+    result_json = _run_web_search(text, state)
+    return _tool_output_fallback(result_json), []
+
+
 def _local_ui_action(messages: list[dict]) -> tuple[str, list[dict]] | None:
     if not messages:
         return None
@@ -621,25 +806,21 @@ def _local_ui_action(messages: list[dict]) -> tuple[str, list[dict]] | None:
     )
 
 
-def chat_with_agent(messages: list[dict], state: dict) -> tuple[str, list[dict]]:
-    local_action = _local_ui_action(messages)
-    if local_action is not None:
-        return local_action
+def chat_with_agent(messages: list[dict], state: dict, context: dict | None = None) -> tuple[str, list[dict], list[dict]]:
+    for shortcut in (_local_ui_action(messages), _local_full_profile_answer(messages, state), _local_compensation_answer(messages, state), _local_search_answer(messages, state)):
+        if shortcut is not None:
+            text, actions = shortcut
+            return text, actions, []
 
-    local_full_profile = _local_full_profile_answer(messages, state)
-    if local_full_profile is not None:
-        return local_full_profile
-    local_compensation = _local_compensation_answer(messages, state)
-    if local_compensation is not None:
-        return local_compensation
     llm, err = get_llm()
     if err:
-        return f"Error: {err}", []
+        return f"Error: {err}", [], []
 
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
     from langchain_core.tools import tool
 
     ui_actions_captured = []
+    cards_captured = []
 
     @tool
     def kpis() -> str:
@@ -648,6 +829,13 @@ def chat_with_agent(messages: list[dict], state: dict) -> tuple[str, list[dict]]
         total = len(df)
         accepted = int(df["accepted"].sum())
         status_counts = {str(key): int(value) for key, value in df["status"].value_counts().to_dict().items()}
+        cards_captured.append({
+            "type": "kpis",
+            "total_offers": total,
+            "accepted_or_joined": accepted,
+            "acceptance_rate": round(accepted / total, 3),
+            "no_show": int(status_counts.get("No Show", 0)),
+        })
         return json.dumps({
             "total_offers": total,
             "accepted_or_joined": accepted,
@@ -696,6 +884,20 @@ def chat_with_agent(messages: list[dict], state: dict) -> tuple[str, list[dict]]
             min_records=MIN_BENCHMARK_RECORDS,
         )
         adjusted = _benchmark_adjusted_offer(state["model"], candidate, percentiles, offered_ctc, target_probability=0.70)
+
+        band = adjusted.get("benchmark_percentiles") or {}
+        cards_captured.append({
+            "type": "quote",
+            "offered_ctc": offered_ctc,
+            "probability": adjusted.get("raw_model_probability"),
+            "suggested_ctc": adjusted.get("benchmark_adjusted_suggestion"),
+            "probability_at_suggestion": adjusted.get("probability_at_suggestion"),
+            "p20": band.get("p20"),
+            "p50": band.get("p50"),
+            "p80": band.get("p80"),
+            "status": adjusted.get("recommendation_status"),
+            "label": f"{primary_skill} · {offered_band} · {location}",
+        })
 
         return json.dumps({
             **adjusted,
@@ -800,7 +1002,85 @@ def chat_with_agent(messages: list[dict], state: dict) -> tuple[str, list[dict]]
         ui_actions_captured.append(action)
         return json.dumps({"status": "success", "ui_updated": True, "action": action})
 
-    tools = [simulator, kpis, optimize_offer, filter_ui]
+    @tool
+    def web_search(query: str) -> str:
+        """Search the web for external market salary data, compensation benchmarks, or role details.
+
+        Args:
+            query: The search query (e.g., 'Java Spring developer salary Bangalore 2026' or 'EP1 Cloud engineer salary Mumbai').
+        """
+        return _run_web_search(query, state)
+
+    @tool
+    def prefill_simulator(
+        offered_ctc: float,
+        current_ctc: float = 12.0,
+        expected_ctc: float = 17.0,
+        relevant_experience_years: float = 6.0,
+        notice_period_days: float = 30.0,
+        offered_band: str = "E2",
+        candidate_source: str = "Direct",
+        lob: str = "Digital",
+        primary_skill: str = "Java Spring",
+        previous_company_type: str = "Service",
+        location: str = "Bangalore",
+        joining_bonus: int = 0,
+        relocation: int = 0,
+        run: bool = True,
+    ) -> str:
+        """Fill the Offer Studio form on screen with this candidate and (by default) run the full visible quote.
+        Use when the user asks to price, quote, evaluate, or run a candidate so they see the complete analysis."""
+        df = state["df"]
+
+        def coerce(column: str, value) -> str:
+            choices = [str(v) for v in df[column].dropna().unique()]
+            text = str(value).strip().lower()
+            for choice in choices:
+                if choice.lower() == text:
+                    return choice
+            for choice in choices:
+                if text in choice.lower() or choice.lower() in text:
+                    return choice
+            return choices[0] if choices else str(value)
+
+        fields = {
+            "current_ctc": float(current_ctc),
+            "expected_ctc": float(expected_ctc),
+            "offered_ctc": float(offered_ctc),
+            "relevant_experience_years": float(relevant_experience_years),
+            "notice_period_days": float(notice_period_days),
+            "offered_band": coerce("offered_band", offered_band),
+            "candidate_source": coerce("candidate_source", candidate_source),
+            "lob": coerce("lob", lob),
+            "primary_skill": coerce("primary_skill", primary_skill),
+            "previous_company_type": coerce("previous_company_type", previous_company_type),
+            "location": coerce("location", location),
+            "joining_bonus": int(joining_bonus),
+            "relocation": int(relocation),
+        }
+        ui_actions_captured.append({"type": "PREFILL_SIMULATOR", "fields": fields, "run": bool(run)})
+        return json.dumps({
+            "status": "success",
+            "message": "Offer Studio filled on screen" + (" and the quote is running." if run else "."),
+            "fields": fields,
+        })
+
+    @tool
+    def desk_brief() -> str:
+        """Live snapshot of the whole desk for a morning briefing: acceptance trend direction,
+        strongest/weakest skill segments, and at-risk offers flagged by the autonomous risk agent."""
+        stats = _desk_brief_stats(state)
+        cards_captured.append({
+            "type": "brief",
+            "acceptance_rate": stats["overall_acceptance_rate"],
+            "trend_direction": stats["trend_direction"],
+            "at_risk": stats["at_risk_flagged"],
+            "best_skill": stats["best_skill"]["skill"] if stats.get("best_skill") else None,
+            "worst_skill": stats["worst_skill"]["skill"] if stats.get("worst_skill") else None,
+        })
+        return json.dumps(stats)
+
+    tools = [simulator, kpis, optimize_offer, filter_ui, web_search, prefill_simulator, desk_brief]
     active_provider = os.environ.get("LLM_PROVIDER", "groq").strip().lower()
     if active_provider in {"radeon", "amd", "ryzen-ai", "ryzen_ai"}:
         llm_with_tools = llm
@@ -808,6 +1088,10 @@ def chat_with_agent(messages: list[dict], state: dict) -> tuple[str, list[dict]]
         llm_with_tools = llm.bind_tools(tools)
 
     lc_messages = [SystemMessage(content=SYSTEM_INSTRUCTION)]
+    if context:
+        safe_context = {key: context[key] for key in ("view", "last_quote", "last_deal") if context.get(key)}
+        if safe_context:
+            lc_messages.append(SystemMessage(content=f"Live desk context (what the user currently sees): {json.dumps(safe_context)[:1500]}"))
     for message in messages[-12:]:
         role = message.get("role")
         content = message.get("content", "")
@@ -820,20 +1104,28 @@ def chat_with_agent(messages: list[dict], state: dict) -> tuple[str, list[dict]]
         ai_msg = llm_with_tools.invoke(lc_messages)
         lc_messages.append(ai_msg)
 
-        if ai_msg.tool_calls:
-            tool_outputs = []
-            for tool_call in ai_msg.tool_calls:
+        last_tool_output = None
+        for _ in range(4):
+            tool_calls = getattr(ai_msg, "tool_calls", None) or []
+            if not tool_calls:
+                break
+            for tool_call in tool_calls:
                 selected_tool = next((item for item in tools if item.name == tool_call["name"]), None)
                 if selected_tool:
-                    tool_output = selected_tool.invoke(tool_call["args"])
-                    tool_outputs.append(str(tool_output))
-                    lc_messages.append(ToolMessage(content=tool_output, tool_call_id=tool_call["id"]))
-            if tool_outputs:
-                return _tool_output_fallback(tool_outputs[-1]), ui_actions_captured
+                    tool_output = str(selected_tool.invoke(tool_call["args"]))
+                else:
+                    tool_output = json.dumps({"error": f"Unknown tool: {tool_call['name']}"})
+                last_tool_output = tool_output
+                lc_messages.append(ToolMessage(content=tool_output, tool_call_id=tool_call["id"]))
+            ai_msg = llm_with_tools.invoke(lc_messages)
+            lc_messages.append(ai_msg)
 
-        return str(ai_msg.content or "").strip(), ui_actions_captured
+        response_text = str(ai_msg.content or "").strip()
+        if not response_text and last_tool_output is not None:
+            response_text = _tool_output_fallback(last_tool_output)
+        return response_text, ui_actions_captured, cards_captured
     except Exception as exc:
-        return f"Sorry, an error occurred while generating the response: {exc}", []
+        return f"Sorry, an error occurred while generating the response: {exc}", [], []
 
 
 def _tool_output_fallback(raw_output: str) -> str:
@@ -846,6 +1138,36 @@ def _tool_output_fallback(raw_output: str) -> str:
         if value is None:
             return "not available"
         return f"{float(value):.2f} LPA"
+
+    if data.get("status") == "success" and isinstance(data.get("action"), dict) and data["action"].get("type") == "FILTER_UI":
+        tab = data["action"].get("tab") or "requested"
+        return f"Opening the {tab} view."
+
+    if data.get("status") == "success" and isinstance(data.get("fields"), dict):
+        return "I've loaded the candidate into the Offer Studio — the full quote is on screen."
+
+    if "results" in data and ("source" in data and data["source"] in {"web_search", "local_database_fallback"}):
+        query = data.get("query", "")
+        if data["source"] == "web_search":
+            heading = f"### External Market Search Results for '{query}':"
+            source = "Web Search"
+        else:
+            heading = f"### Market Estimate for '{query}' (internal benchmarks):"
+            source = "Internal database - live web search unavailable"
+        parts = [
+            heading,
+            f"*(Source: {source})*",
+            ""
+        ]
+        for idx, res in enumerate(data.get("results", [])):
+            title = res.get("title", "Search Result")
+            url = res.get("url", "#")
+            snippet = res.get("snippet", "")
+            parts.append(f"{idx + 1}. **{title}** ({url})")
+            if snippet:
+                parts.append(f"   {snippet}")
+            parts.append("")
+        return "\n".join(parts)
 
     if {"total_offers", "accepted_or_joined", "acceptance_rate"}.issubset(data):
         return (
@@ -922,7 +1244,11 @@ def _tool_output_fallback(raw_output: str) -> str:
             f"with predicted acceptance of {data['achieved_probability']:.0%}."
         )
 
-    return json.dumps(data, indent=2)
+    # Last resort: readable summary instead of leaking raw JSON into the chat.
+    flat = {key: value for key, value in data.items() if not isinstance(value, (dict, list))}
+    if flat:
+        return "Here is what I found - " + "; ".join(f"{key.replace('_', ' ')}: {value}" for key, value in flat.items()) + "."
+    return "I ran the requested action, but could not summarize the result. Please try rephrasing."
 
 
 
