@@ -16,6 +16,28 @@ PACT replaces the guess with a market view:
 2. **Stress-test the deal** — two AI agents negotiate it round-by-round before a human ever does.
 3. **Never lose silently** — an autonomous radar re-scores live offers and drafts escalations for deals about to fall through.
 
+
+## Screenshots
+
+### Offer Studio: CTC quote and acceptance meter
+![Offer Studio: CTC quote and acceptance meter](docs/images/offer-studio-ctc-quote.png)
+
+### Desk Copilot: salary recommendation
+![Desk Copilot: salary recommendation](docs/images/desk-copilot-salary-recommendation.png)
+
+### Desk Copilot: daily desk brief
+![Desk Copilot: daily desk brief](docs/images/desk-copilot-daily-brief.png)
+
+### The Arena: negotiated final terms
+![The Arena: negotiated final terms](docs/images/arena-final-terms.png)
+
+### Risk Radar: flagged live deals
+![Risk Radar: flagged live deals](docs/images/risk-radar-flagged-deals.png)
+
+### The Arena: recruiter and candidate agents
+![The Arena: recruiter and candidate agents](docs/images/arena-agent-negotiation.png)
+
+
 ## The desk (five screens)
 
 | Screen | What it does |
